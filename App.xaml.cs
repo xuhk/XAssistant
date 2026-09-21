@@ -5,7 +5,6 @@ using Microsoft.Win32;
 using Serilog;
 using XAssistant.Services;
 using XAssistant.Services.Interfaces;
-using XAssistant.Services.QuickNote;
 using XAssistant.ViewModels;
 using XAssistant.Views;
 
@@ -15,9 +14,13 @@ public partial class App : System.Windows.Application
 {
     public static IServiceProvider Services { get; private set; } = null!;
     private NotifyIcon? _notifyIcon;
-    private QuickNoteCaptureService? _quickNoteCapture;
-    private GlobalHotkeyService? _globalHotkey;
     internal static bool IsShuttingDown { get; private set; }
+
+    /// <summary>
+    /// 托盘右键菜单建好后触发（尚未挂到托盘图标上），供本机私有模块往菜单里插条目。
+    /// 订阅必须在 InitializeNotifyIcon 之前完成，见 OnStartup 里 LocalModules.AttachAll 的调用位置。
+    /// </summary>
+    public static event Action<ContextMenuStrip>? TrayMenuCreated;
 
     private ILogger<App>? _appLogger;
     private bool _isDataSaved;
@@ -74,11 +77,11 @@ public partial class App : System.Windows.Application
 
         services.AddSingleton<ProcessUsageTracker>();
 
-        // 速记唤起（全局热键 + 原生捕获窗 + 直插速记库 + 保存确认 toast）
-        services.AddSingleton<IQuickNoteDatabaseService, QuickNoteDatabaseService>();
+        // Toast：各页面的轻量确认提示
         services.AddSingleton<ToastService>();
-        services.AddSingleton<GlobalHotkeyService>();
-        services.AddSingleton<QuickNoteCaptureService>();
+
+        // 本机私有模块（Local/ 目录）；开源版没有实现，这里什么都不会发生
+        LocalModules.RegisterAll(services);
 
         // 配置 Serilog Logger
         Log.Logger = new LoggerConfiguration()
@@ -114,11 +117,8 @@ public partial class App : System.Windows.Application
         MainWindow = mainWindow;
         mainWindow.Show();
 
-        // 速记唤起：注册全局热键，热键按下 → 唤起捕获窗
-        _quickNoteCapture = provider.GetRequiredService<QuickNoteCaptureService>();
-        _globalHotkey = provider.GetRequiredService<GlobalHotkeyService>();
-        _globalHotkey.HotKeyPressed += () => _quickNoteCapture.InvokeCapture();
-        _globalHotkey.Start();
+        // 必须在 InitializeNotifyIcon 之前：私有模块要在这里订阅 TrayMenuCreated 才能插进托盘菜单
+        LocalModules.AttachAll(provider);
 
         InitializeNotifyIcon(mainWindow);
     }
@@ -144,10 +144,19 @@ public partial class App : System.Windows.Application
         // 右键菜单
         var contextMenu = new ContextMenuStrip();
         contextMenu.Items.Add("显示", null, (_, _) => ShowMainWindow(mainWindow));
-        contextMenu.Items.Add("打开速记窗", null, (_, _) => _quickNoteCapture?.InvokeCapture());
-        contextMenu.Items.Add("速记列表", null, (_, _) => _quickNoteCapture?.OpenList());
         contextMenu.Items.Add(new ToolStripSeparator());
         contextMenu.Items.Add("退出", null, (_, _) => ShutdownApplication());
+
+        // 本机私有模块在这里插菜单项（开源版无订阅者）
+        try
+        {
+            TrayMenuCreated?.Invoke(contextMenu);
+        }
+        catch (Exception ex)
+        {
+            _appLogger?.LogWarning(ex, "托盘菜单扩展失败，已忽略");
+        }
+
         _notifyIcon.ContextMenuStrip = contextMenu;
     }
 
@@ -217,7 +226,6 @@ public partial class App : System.Windows.Application
         // 防止重复保存（如果已经通过 SessionEnding 或 ShutdownApplication 保存过）
         SaveDataAndStopTracker();
 
-        _globalHotkey?.Dispose();
         _notifyIcon?.Dispose();
         // 移除事件订阅，避免内存泄漏
         SystemEvents.SessionEnding -= OnSessionEnding;

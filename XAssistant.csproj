@@ -20,13 +20,33 @@
     <Page Remove="XAssistant.Service\**" />
   </ItemGroup>
 
+  <!-- temp/ 是临时空间（已 gitignore），里面可能有独立的小项目（如 WebView2 探针），
+       不能被主项目的默认通配吸进来，否则重复的 AssemblyInfo 属性会让编译直接失败。 -->
+  <ItemGroup>
+    <Compile Remove="temp\**" />
+    <EmbeddedResource Remove="temp\**" />
+    <None Remove="temp\**" />
+    <Page Remove="temp\**" />
+  </ItemGroup>
+
+  <!-- 本机私有模块（Local/ 是指向仓库外目录的联结，已被 .gitignore）。
+       先 Remove 再 Include，避免 SDK 默认通配已经收过一遍导致 NETSDK1022 重复项。
+       Local/ 不存在时整个 ItemGroup 为空。 -->
+  <ItemGroup Condition="Exists('Local')">
+    <Compile Remove="Local/**/*.cs" />
+    <Compile Include="Local/**/*.cs" />
+    <Page Remove="Local/**/*.xaml" />
+    <Page Include="Local/**/*.xaml" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.7" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.7" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.7" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.7" />
-    <PackageReference Include="Npgsql" Version="10.0.3" />
+    <!-- Npgsql 只有本机私有模块（Local/ 里的速记）在用，开源构建不拉这个包 -->
+    <PackageReference Include="Npgsql" Version="10.0.3" Condition="Exists('Local')" />
     <PackageReference Include="Serilog.Extensions.Logging" Version="8.0.0" />
     <PackageReference Include="Serilog.Sinks.File" Version="5.0.0" />
     <PackageReference Include="System.Management" Version="9.0.0" />
