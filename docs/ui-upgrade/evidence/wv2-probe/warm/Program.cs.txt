@@ -1,0 +1,128 @@
+using System.Diagnostics;
+using System.IO;
+using System.Text;
+using System.Windows;
+using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.Wpf;
+
+namespace Wv2Warm;
+
+/// <summary>
+/// 每轮都新建 Environment（不复用），看首帧耗时是否仍会从 3.3s 掉到 ~1s。
+/// 若是 → 提速来源是「DLL 已加载进进程」→ 开机空闲时预热一次有效（代价：常驻 +70MB）。
+/// 若否 → 提速来源是「env 复用」→ 预热无用，只能上骨架屏。
+/// </summary>
+public static class Program
+{
+    const string OutFile = @"D:\code\XAssistant\temp\wv2-probe\warm-result.txt";
+    const string TargetPage = @"file:///D:/code/XAssistant/temp/ui-design/v4/index.html";
+    static readonly StringBuilder SB = new();
+
+    static void L(string s)
+    {
+        SB.AppendLine(s);
+        File.WriteAllText(OutFile, SB.ToString(), new UTF8Encoding(false));
+    }
+
+    static long Private()
+    {
+        using var p = Process.GetCurrentProcess();
+        p.Refresh();
+        return p.PrivateMemorySize64;
+    }
+
+    static string MB(long b) => (b / 1048576.0).ToString("N1") + " MB";
+
+    [STAThread]
+    public static void Main()
+    {
+        var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+        app.Startup += async (s, e) =>
+        {
+            try
+            {
+                await Run();
+            }
+            catch (Exception ex)
+            {
+                L("EXCEPTION: " + ex);
+            }
+            app.Shutdown();
+        };
+        app.Run();
+    }
+
+    static async Task Run()
+    {
+        L("=== 每轮新建 Environment（不复用）的首帧耗时 ===");
+        L("时间: " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+        L("基线私有内存: " + MB(Private()));
+        L("");
+        L("轮次 | env 新建 | CoreReady | 首帧 | 关窗后私有 | 残留子进程");
+        L("---- | ------- | --------- | ---- | ---------- | ----------");
+
+        var prior = Process
+            .GetProcessesByName("msedgewebview2")
+            .Select(x => x.Id)
+            .ToHashSet();
+
+        for (int c = 1; c <= 3; c++)
+        {
+            var t0 = Stopwatch.StartNew();
+            var env = await CoreWebView2Environment.CreateAsync(
+                null,
+                @"D:\code\XAssistant\temp\wv2-probe\udf4",
+                null
+            );
+            var tEnv = t0.ElapsedMilliseconds;
+
+            var wv = new WebView2();
+            var win = new Window
+            {
+                Width = 1400,
+                Height = 900,
+                Content = wv,
+                WindowStartupLocation = WindowStartupLocation.CenterScreen,
+            };
+            win.Show();
+            await wv.EnsureCoreWebView2Async(env);
+            var tCore = t0.ElapsedMilliseconds;
+
+            var tcs = new TaskCompletionSource<bool>();
+            wv.NavigationCompleted += (a, b) => tcs.TrySetResult(true);
+            wv.Source = new Uri(TargetPage);
+            await Task.WhenAny(tcs.Task, Task.Delay(30000));
+            var tFrame = t0.ElapsedMilliseconds;
+
+            await Task.Delay(2000);
+            win.Content = null;
+            win.Close();
+            wv.Dispose();
+            env = null;
+            for (int i = 0; i < 3; i++)
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+            }
+            await Task.Delay(4000);
+
+            var resid = Process.GetProcessesByName("msedgewebview2").Count(p => !prior.Contains(p.Id));
+            L(
+                "  "
+                    + c
+                    + "   | "
+                    + (tEnv + " ms").PadLeft(7)
+                    + " | "
+                    + (tCore + " ms").PadLeft(9)
+                    + " | "
+                    + (tFrame + " ms").PadLeft(4)
+                    + " | "
+                    + MB(Private()).PadLeft(10)
+                    + " | "
+                    + resid
+            );
+        }
+        L("");
+        L("=== 结束 ===");
+    }
+}

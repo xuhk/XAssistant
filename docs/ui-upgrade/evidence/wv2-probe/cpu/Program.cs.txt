@@ -1,0 +1,149 @@
+using System.Diagnostics;
+using System.IO;
+using System.Text;
+using System.Windows;
+using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.Wpf;
+
+namespace Wv2Cpu;
+
+/// <summary>
+/// 主窗开着时的 CPU 代价：可见 / 最小化 / 隐藏 三种状态各采样 10s。
+/// v4 页面带过渡与动效，若后台仍持续渲染会白烧 CPU，这条直接决定"会不会拖慢系统"。
+/// </summary>
+public static class Program
+{
+    const string OutFile = @"D:\code\XAssistant\temp\wv2-probe\cpu-result.txt";
+    const string TargetPage = @"file:///D:/code/XAssistant/temp/ui-design/v4/index.html";
+    static readonly StringBuilder SB = new();
+
+    static void L(string s)
+    {
+        SB.AppendLine(s);
+        File.WriteAllText(OutFile, SB.ToString(), new UTF8Encoding(false));
+    }
+
+    static HashSet<int> EdgePids() => Process.GetProcessesByName("msedgewebview2").Select(x => x.Id).ToHashSet();
+
+    static double CpuSeconds(HashSet<int> mine, bool self)
+    {
+        double t = 0;
+        if (self)
+        {
+            using var p = Process.GetCurrentProcess();
+            p.Refresh();
+            t += p.TotalProcessorTime.TotalSeconds;
+        }
+        foreach (var p in Process.GetProcessesByName("msedgewebview2"))
+        {
+            if (!mine.Contains(p.Id))
+                continue;
+            try
+            {
+                p.Refresh();
+                t += p.TotalProcessorTime.TotalSeconds;
+            }
+            catch { }
+        }
+        return t;
+    }
+
+    static async Task Sample(string label, HashSet<int> mine, int windowSec)
+    {
+        var c0 = CpuSeconds(mine, true);
+        await Task.Delay(windowSec * 1000);
+        var c1 = CpuSeconds(mine, true);
+        var used = c1 - c0;
+        // 折算成「占单个核心的百分比」（本机多核，除以核心数才是整机占比）
+        var pctOneCore = used / windowSec * 100.0;
+        var pctMachine = pctOneCore / Environment.ProcessorCount;
+        L(
+            "    "
+                + label.PadRight(20)
+                + " 采样 "
+                + windowSec
+                + "s 消耗 CPU "
+                + used.ToString("N2")
+                + " s  → 折合单核 "
+                + pctOneCore.ToString("N1")
+                + "% ，整机（"
+                + Environment.ProcessorCount
+                + " 核）"
+                + pctMachine.ToString("N2")
+                + "%"
+        );
+    }
+
+    [STAThread]
+    public static void Main()
+    {
+        var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+        app.Startup += async (s, e) =>
+        {
+            try
+            {
+                await Run();
+            }
+            catch (Exception ex)
+            {
+                L("EXCEPTION: " + ex);
+            }
+            app.Shutdown();
+        };
+        app.Run();
+    }
+
+    static async Task Run()
+    {
+        L("=== 主窗开着时的 CPU 代价 ===");
+        L("时间: " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+        L("逻辑核心数: " + Environment.ProcessorCount);
+        var prior = EdgePids();
+
+        var udf = @"D:\code\XAssistant\temp\wv2-probe\udf3";
+        var env = await CoreWebView2Environment.CreateAsync(null, udf, null);
+        var wv = new WebView2();
+        var win = new Window
+        {
+            Width = 1400,
+            Height = 900,
+            Content = wv,
+            WindowStartupLocation = WindowStartupLocation.CenterScreen,
+        };
+        win.Show();
+        await wv.EnsureCoreWebView2Async(env);
+        var tcs = new TaskCompletionSource<bool>();
+        wv.NavigationCompleted += (a, b) => tcs.TrySetResult(true);
+        wv.Source = new Uri(TargetPage);
+        await Task.WhenAny(tcs.Task, Task.Delay(30000));
+
+        var mine = EdgePids().Except(prior).ToHashSet();
+        L("WebView2 子进程数: " + mine.Count);
+        L("");
+        L("[A] 窗口可见、前台");
+        await Task.Delay(4000);
+        await Sample("可见(前台)", mine, 10);
+
+        L("");
+        L("[B] 窗口最小化");
+        win.WindowState = WindowState.Minimized;
+        await Task.Delay(4000);
+        await Sample("最小化", mine, 10);
+
+        L("");
+        L("[C] 窗口隐藏（模拟关到托盘但保留控件）");
+        win.Hide();
+        await Task.Delay(4000);
+        await Sample("隐藏", mine, 10);
+
+        L("");
+        L("[D] 回前台再看一次，确认可恢复");
+        win.Show();
+        win.WindowState = WindowState.Normal;
+        await Task.Delay(4000);
+        await Sample("重新可见", mine, 10);
+
+        L("");
+        L("=== 结束 ===");
+    }
+}

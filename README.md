@@ -38,7 +38,6 @@
 | 🖱️ 鼠标点击统计 | 记录左 / 中 / 右键点击次数 |
 | 💻 电脑使用时长 | 记录电脑每天的开机 / 使用时长，依赖后台服务 XAssistant.Service |
 | 📊 应用使用时长 | WMI 追踪各应用使用时长——**不完善，统计可能有偏差** |
-| 📝 灵感速记（可选） | 全局热键唤起速记窗，需自备数据库连接串，见下文 |
 
 关闭窗口只是隐藏到托盘，托盘菜单中才有"退出"。
 
@@ -55,20 +54,6 @@
 - 日志：`%APPDATA%\XAssistant\logs\`（滚动保留 31 天）
 
 均为本地文件，不联网上传。
-
-## 灵感速记（可选）
-
-全局热键默认 `Win+Numpad0`。编辑 `%APPDATA%\XAssistant\appsettings.json`，在 `QuickNote` 节点填写 PostgreSQL 连接串即可启用：
-
-```json
-{
-  "QuickNote": {
-    "ConnectionString": "Host=主机;Port=5432;Database=库名;Username=用户;Password=密码"
-  }
-}
-```
-
-未配置时该功能禁用，不影响其它功能。
 
 ## 构建
 

@@ -10,7 +10,6 @@ XAssistant 是一款 Windows 桌面活动监控应用（WPF、C#、.NET 10），
 - **键盘按键**，通过低级 Win32 钩子实现
 - **各应用使用时长**（哪些进程被使用了多久），通过 WMI 进程事件实现
 - **电脑整体使用时长**（开机/睡眠/唤醒）——这部分数据来自**本仓库之外的独立外部 "UsageTracker" 服务**
-- **灵感速记唤起**（xapp 速记功能的 OS 级入口）——全局热键 `Win+Numpad0` 唤起原生速记窗并直插速记库，见下方「速记唤起」节
 
 UI 采用基于 CommunityToolkit.Mvvm 的 WPF MVVM 架构。项目没有自动化测试。
 
@@ -29,7 +28,7 @@ UI 采用基于 CommunityToolkit.Mvvm 的 WPF MVVM 架构。项目没有自动�
 - `click_data.db` —— 表 `ClickRecords(Id, Button, ClickTime)`
 - `key_data.db` —— 表 `KeyPressRecords(Id, Key, PressTime)`
 - `app_usage.db` —— 表 `ProcessSession(Id, ProcessName, StartTime, EndTime, WindowTitle, Date, AccumulatedSeconds, LastUpdateTime)`；WAL 模式；由 `ProcessUsageTracker` 写入
-- `appsettings.json` —— `AppSettings`（录制自动启动开关、窗口大小、日志面板状态、速记唤起 `QuickNote` 段——含速记库连接串 `QuickNote.ConnectionString`），由 `ConfigurationService` 负责
+- `appsettings.json` —— `AppSettings`（录制自动启动开关、窗口大小、日志面板状态），由 `ConfigurationService` 负责
 - `logs/xassistant-<日期>.log` —— Serilog 滚动文件日志（保留 31 天）
 
 时间戳以字符串形式存储：点击/键盘数据库使用 ISO 8601（`"o"`）格式，`ProcessSession` 使用 `yyyy-MM-dd HH:mm:ss.fff`（另有独立的 `Date` 列，格式为 `yyyy-MM-dd`，用于按天分桶）。
@@ -55,15 +54,10 @@ UI 采用基于 CommunityToolkit.Mvvm 的 WPF MVVM 架构。项目没有自动�
 
 实时 UI 更新全部通过 `DispatcherTimer` 轮询或事件驱动计数器实现——没有发布/订阅总线。
 
-### 速记唤起（灵感速记的 OS 级入口）
-本仓库为 xapp「灵感速记」功能提供全局唤起与写库链路（速记表、tRPC 接口、列表页都在 xapp 仓库，spec 见 `C:\xapp-2026-06-30\docs\specs\global-quick-note.md`，写入归属决策见 xapp `docs/adr/0010`）。相关文件在 `Services/QuickNote/` 与 `Views/QuickNoteWindow`：
+### 本机私有模块（Local/）
+`Services/LocalModules.cs` 是通用挂载点：反射扫当前程序集里实现 `ILocalModule` 的类型，容器构建前调 `Register(services)`、启动后调 `Attach(provider)`（实现类需有公开无参构造；单个模块失败只记警告）。**开源版没有任何实现**，因此整段是空转的；私有代码放在被 gitignore 的 `Local/`（指向仓库外私有仓库的目录联结），编译进同一程序集即被自动发现。
 
-- `GlobalHotkeyService` —— 经隐藏 `NativeWindow` 注册 `RegisterHotKey`（默认 `Win+Numpad0`，配置在 `AppSettings.QuickNote.HotKey`），`WM_HOTKEY` 触发事件；注册失败降级为托盘唤起，仅记日志不中断。
-- `QuickNoteCaptureService` —— `InvokeCapture()`：速记窗已开则置顶聚焦（自持窗体引用单实例复用，不覆盖已输入内容与来源），未开则抓当前前台窗口标题作来源、弹原生无边框置顶小窗（`Views/QuickNoteWindow`，420×560，落在前台窗口所在屏居中）；`OpenList()` 普通标签打开列表页 `<基址>/quick-note`。
-- `QuickNoteDatabaseService` —— Npgsql 直插 xapp 主库 `quick_notes` 表，只写 `content`/`source`，时间戳靠 DB 默认；连接串优先用 `AppSettings.QuickNote.ConnectionString`（复制自 xapp `.env` 的 `DATABASE_URL`，支持直接粘贴 URI），未配置时自动读取 `DatabaseUrlEnvPath`（默认 `C:\xapp-2026-06-30\.env`）的 `DATABASE_URL`。空内容由 UI 侧拦截；保存失败文字保留可重试。
-- `Views/QuickNoteWindow` + `QuickNoteViewModel` —— 原生速记窗：多行输入自动聚焦，`Ctrl+Enter` 保存关窗、`Esc` 取消不保存、保存失败显示错误并保留内容；保存成功弹右下角 toast（`Services/ToastService` + `Views/ToastWindow`）确认落库。
-- 与 xapp 的契约：列表路由 `/quick-note`、直插 `INSERT INTO quick_notes (content, source) VALUES ($1, $2)`。`quick_notes` 表新增 `NOT NULL` 无默认值列会断直插写入且无即时报错，改表须同步本仓库（xapp `docs/domains/quick-note.md` 已知坑已记录）。
-- 基址默认随构建配置：Debug `http://localhost:3009`（开发版）、Release `http://localhost:9009`（生产版），可经 `AppSettings.QuickNote.SpaBaseUrl` 覆盖。决策见 `docs/adr/0001`、`docs/adr/0003`，词汇见 `CONTEXT.md`。
+共用代码只有三处挂钩，改启动流程或托盘菜单时别删：`App.xaml.cs` 的 `LocalModules.RegisterAll` 与 `AttachAll`（**`AttachAll` 必须在 `InitializeNotifyIcon` 之前**，私有模块要在这里订上事件），以及静态事件 `App.TrayMenuCreated`（托盘菜单建好、尚未挂到图标上时触发）。
 
 ### ProcessUsageTracker（复杂部分）
 最大的服务（约 950 行），也是 bug 最多的地方。关键设计要点：
@@ -85,4 +79,4 @@ Serilog 同时写入滚动文件日志和 `UiLogSink`，后者把 `LogEntry` 推
 - 代码注释一律用**中文**编写——新注释请保持一致。
 - 录制自动启动开关（鼠标/键盘）通过 `ConfigurationService` 在重启后保持。
 - 应用最小化到系统托盘（Windows Forms `NotifyIcon`；项目在 WPF 之外启用了 `UseWindowsForms`）。关闭窗口是隐藏而不是退出——只有托盘“退出”菜单才会真正退出。
-- `temp/` 目录是已加入 gitignore 的临时空间。
+- `temp/` 目录是已加入 gitignore 的临时空间，csproj 里另有显式的 `temp\**` 通配排除——**gitignore 不影响 MSBuild 通配**，往里放带自己 csproj 的小项目否则会被主项目收进来、直接编译失败。

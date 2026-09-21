@@ -1,0 +1,177 @@
+using System.Diagnostics;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Windows;
+using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.Wpf;
+
+namespace Wv2Residue;
+
+/// <summary>
+/// 定位「释放 WebView2 后宿主进程仍多占 ~73 MB 私有内存」的归属：
+/// 托管堆（GC.GetTotalMemory）还是原生残留（私有 - 托管）。
+/// 结果是决定「能否救回来」的判据。运行完自动退出。
+/// </summary>
+public static class Program
+{
+    const string OutFile = @"D:\code\XAssistant\temp\wv2-probe\residue-result.txt";
+    const string TargetPage = @"file:///D:/code/XAssistant/temp/ui-design/v4/index.html";
+    static readonly StringBuilder SB = new();
+
+    [DllImport("psapi.dll", SetLastError = true)]
+    static extern bool EmptyWorkingSet(IntPtr hProcess);
+
+    static void L(string s)
+    {
+        SB.AppendLine(s);
+        File.WriteAllText(OutFile, SB.ToString(), new UTF8Encoding(false));
+    }
+
+    static long Private()
+    {
+        using var p = Process.GetCurrentProcess();
+        p.Refresh();
+        return p.PrivateMemorySize64;
+    }
+
+    static long WS()
+    {
+        using var p = Process.GetCurrentProcess();
+        p.Refresh();
+        return p.WorkingSet64;
+    }
+
+    static int ModuleCount() => Process.GetCurrentProcess().Modules.Count;
+
+    static string MB(long b) => (b / 1048576.0).ToString("N1") + " MB";
+
+    static void Snap(string label)
+    {
+        long priv = Private();
+        long managed = GC.GetTotalMemory(true);
+        L(
+            "    "
+                + label.PadRight(22)
+                + " 私有 "
+                + MB(priv).PadLeft(9)
+                + " | 托管堆 "
+                + MB(managed).PadLeft(8)
+                + " | 非托管残留 "
+                + MB(priv - managed).PadLeft(9)
+                + " | 工作集 "
+                + MB(WS()).PadLeft(9)
+                + " | 模块数 "
+                + ModuleCount()
+        );
+    }
+
+    [STAThread]
+    public static void Main()
+    {
+        var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+        app.Startup += async (s, e) =>
+        {
+            try
+            {
+                await Run();
+            }
+            catch (Exception ex)
+            {
+                L("EXCEPTION: " + ex);
+            }
+            app.Shutdown();
+        };
+        app.Run();
+    }
+
+    static void ForceGC()
+    {
+        for (int i = 0; i < 3; i++)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+        }
+    }
+
+    static async Task Run()
+    {
+        L("=== WebView2 宿主残留归属分析 ===");
+        L("时间: " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+        L("");
+        L("[阶段 0] 进程刚起来，WPF 已初始化，没碰 WebView2");
+        Snap("基线");
+
+        var udf = @"D:\code\XAssistant\temp\wv2-probe\udf2";
+        L("");
+        L("[阶段 1] 只创建 Environment（不建控件、不导航）");
+        var env = await CoreWebView2Environment.CreateAsync(null, udf, null);
+        ForceGC();
+        Snap("建 env 后");
+
+        L("");
+        L("[阶段 2] 建控件 + 加载 v4 真实页面 + 静置 4s");
+        var wv = new WebView2();
+        var win = new Window
+        {
+            Width = 1400,
+            Height = 900,
+            Content = wv,
+            WindowStartupLocation = WindowStartupLocation.CenterScreen,
+        };
+        win.Show();
+        await wv.EnsureCoreWebView2Async(env);
+        var tcs = new TaskCompletionSource<bool>();
+        wv.NavigationCompleted += (a, b) => tcs.TrySetResult(true);
+        wv.Source = new Uri(TargetPage);
+        await Task.WhenAny(tcs.Task, Task.Delay(30000));
+        await Task.Delay(4000);
+        Snap("页面已加载");
+
+        L("");
+        L("[阶段 3] 释放控件（等价于 app「关窗到托盘」）");
+        win.Content = null;
+        win.Close();
+        wv.Dispose();
+        ForceGC();
+        EmptyWorkingSet(Process.GetCurrentProcess().Handle);
+        await Task.Delay(1500);
+        Snap("控件已 Dispose");
+
+        L("");
+        L("[阶段 4] 再把 Environment 引用也丢掉 + GC");
+        env = null;
+        ForceGC();
+        EmptyWorkingSet(Process.GetCurrentProcess().Handle);
+        await Task.Delay(1500);
+        Snap("env 引用已丢");
+
+        L("");
+        L("[阶段 5] 再等 5s，看有没有延迟归还");
+        await Task.Delay(5000);
+        ForceGC();
+        EmptyWorkingSet(Process.GetCurrentProcess().Handle);
+        await Task.Delay(500);
+        Snap("延迟 5s 后");
+
+        var selfStart = Process.GetCurrentProcess().StartTime;
+        var mine = Process
+            .GetProcessesByName("msedgewebview2")
+            .Where(p =>
+            {
+                try
+                {
+                    return p.StartTime >= selfStart;
+                }
+                catch
+                {
+                    return false;
+                }
+            })
+            .ToList();
+        L("");
+        L("残留 msedgewebview2 子进程: " + mine.Count + " 个");
+        L("本进程 CPU 累计: " + Process.GetCurrentProcess().TotalProcessorTime.TotalSeconds.ToString("N2") + " s");
+        L("=== 结束 ===");
+    }
+}

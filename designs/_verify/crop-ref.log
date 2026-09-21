@@ -1,0 +1,13 @@
+﻿saved ref-topleft
+saved ref-row1
+saved ref-topright
+saved ref-bottom
+probe {
+  "鑳屾櫙路宸︿笂(2,2)": "#c7c7c5",
+  "鑳屾櫙路涓婅竟涓?960,2)": "#b9b9b9",
+  "鑳屾櫙路宸︿腑(2,300)": "#c9c9c7",
+  "鑳屾櫙路宸︿笅(2,585)": "#c9c9c7",
+  "Esc閿潰(56,40)": "#d8d8d8",
+  "Esc涓婅竟妗?56,8)": "#dbdbdb",
+  "鍩烘澘路Esc鍙抽棿闅?105,40)": "#cbcbcb"
+}

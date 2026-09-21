@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="ref">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>键盘布局 · 104 键美式（照截图复刻）</title>
+<style>
+/* ============================================================================
+   键盘布局组件 —— 单文件、零依赖
+   几何（单位为 u，1u = 一个标准键宽；列位取自参考图描边实测）
+     横向  主键区 0→15 ｜隙 0.2｜ 中列簇 15.2→18.2 ｜隙 0.2｜ 数字区 18.4→22.4
+           功能行 Esc 0→1 ｜隙 1.0｜ F1-4 2→6 ｜隙 0.5｜ F5-8 6.5→10.5
+                  ｜隙 0.5｜ F9-12 11→15 ｜隙 0.2｜ PrtSc 组 15.2→18.2（右侧留空，与原图一致）
+     纵向  6 行，行距 1u，键高 0.94u
+   实现  绝对定位 + calc(var(--u) * 位置)，因此 1.75u / 2.25u / 6.25u 等零头键位都精确落位
+   缩放  只改 --u 一个变量，整块等比伸缩（列位/行高/圆角/字号全随动）
+   ========================================================================= */
+
+/* ---------- 主题① 原图灰阶（默认，照参考截图复刻） ---------- */
+:root, [data-theme="ref"]{
+  --page:#c9c9c7;
+  --plate-1:#e5e5e3; --plate-2:#d5d5d3; --plate-bd:rgba(0,0,0,.07);
+  --plate-shadow:0 3px 9px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.6);
+  --cap-1:#e3e3e1; --cap-2:#d1d1cf;
+  --cap-bd:rgba(0,0,0,.2); --cap-edge:rgba(0,0,0,.26); --cap-hi:rgba(255,255,255,.6);
+  --cap-shadow:0 1.5px 2px rgba(0,0,0,.16);
+  --ink:#84848a; --ink-soft:#98989e;
+  --ui-ink:#33383b; --ui-soft:#6b7075;
+  --ui-bg:#e8e8e6; --ui-bd:#b9b9b7; --ui-bg-soft:#dcdcda;
+  --sel-shadow:0 1px 4px rgba(0,0,0,.18);
+}
+/* ---------- 主题② 应用浅色（配 v3 设计系统的白卡 / 浅底） ---------- */
+[data-theme="light"]{
+  --page:#ffffff;
+  --plate-1:#ececec; --plate-2:#dcdcdc; --plate-bd:#c8c8c8;
+  --plate-shadow:0 8px 22px rgba(0,0,0,.10), inset 0 1px 0 rgba(255,255,255,.55);
+  --cap-1:#fdfdfd; --cap-2:#eff0f0;
+  --cap-bd:#c9c9c9; --cap-edge:#b2b2b2; --cap-hi:rgba(255,255,255,.9);
+  --cap-shadow:0 1px 1px rgba(0,0,0,.07);
+  --ink:#3f3f3f; --ink-soft:#6a6a6a;
+  --ui-ink:#191c28; --ui-soft:#989eb0;
+  --ui-bg:#ffffff; --ui-bd:#d8dae6; --ui-bg-soft:#f2f3f8;
+  --sel-shadow:0 1px 4px rgba(25,28,40,.12);
+}
+/* ---------- 主题③ 应用深色 ---------- */
+[data-theme="dark"]{
+  --page:#0f1313;
+  --plate-1:#202626; --plate-2:#171c1c; --plate-bd:#2c3333;
+  --plate-shadow:0 10px 26px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.05);
+  --cap-1:#252b2b; --cap-2:#1a1f1f;
+  --cap-bd:#343c3c; --cap-edge:#0c1010; --cap-hi:rgba(255,255,255,.06);
+  --cap-shadow:0 1px 1px rgba(0,0,0,.4);
+  --ink:#e6ecec; --ink-soft:#98a2a2;
+  --ui-ink:#c6cccc; --ui-soft:#7c8686;
+  --ui-bg:#171d1d; --ui-bd:#2b3434; --ui-bg-soft:#1d2424;
+  --sel-shadow:0 1px 4px rgba(0,0,0,.5);
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font-family:"Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI","PingFang SC",system-ui,sans-serif;
+  background:var(--page);color:var(--ui-ink);
+  padding:24px;display:flex;flex-direction:column;align-items:center;gap:16px;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* ---------- 工具条 ---------- */
+.toolbar{width:100%;max-width:1180px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:13px}
+.toolbar .title{font-weight:650;font-size:14px}
+.toolbar .meta{font-size:12px;color:var(--ui-soft);font-variant-numeric:tabular-nums}
+.toolbar .sp{flex:1}
+.seg{display:inline-flex;gap:3px;padding:3px;background:var(--ui-bg-soft);border:1px solid var(--ui-bd);border-radius:10px}
+.seg button{
+  border:0;background:transparent;cursor:pointer;font:inherit;font-size:12.5px;font-weight:600;
+  color:var(--ui-soft);padding:5px 13px;border-radius:7px;transition:all .14s ease;
+}
+.seg button:hover{color:var(--ui-ink)}
+.seg button.on{background:var(--ui-bg);color:var(--ui-ink);box-shadow:var(--sel-shadow)}
+.chip{
+  display:inline-flex;align-items:center;gap:7px;height:32px;padding:0 13px;cursor:pointer;
+  font:inherit;font-size:12.5px;font-weight:600;color:var(--ui-soft);
+  border:1px solid var(--ui-bd);border-radius:20px;background:var(--ui-bg);transition:all .14s ease;
+}
+.chip:hover{color:var(--ui-ink)}
+.chip.on{background:rgba(251,100,182,.14);border-color:#fb64b6;color:#d63f95}
+[data-theme="dark"] .chip.on{color:#fd8bc9}
+.chip .dot{width:8px;height:8px;border-radius:50%;background:currentColor;opacity:.35}
+.chip.on .dot{opacity:1}
+
+/* ============================================================================
+   键盘本体
+   ========================================================================= */
+#kbdBoard{
+  --u:46px;                  /* 1u 键宽（含间隙），由 JS 按容器宽度写入 */
+  --pad:calc(var(--u)*.24);  /* 基板内边距 */
+  --gapk:calc(var(--u)*.05); /* 键与键之间的可见间隙 */
+  --rh:calc(var(--u)*.94);   /* 单行键高（行距 1u） */
+  width:100%;max-width:1180px;
+}
+.plate{
+  background:linear-gradient(180deg,var(--plate-1),var(--plate-2));
+  border:1px solid var(--plate-bd);border-radius:calc(var(--u)*.22);
+  padding:var(--pad);box-shadow:var(--plate-shadow);
+}
+.body{position:relative;height:calc(var(--u)*5.94)}   /* 5 行距 + 1 键高 */
+
+/* ---------- 键帽 ---------- */
+.cap{
+  position:absolute;                       /* 位置/尺寸由 JS 按 u 写入 */
+  display:flex;align-items:center;justify-content:center;
+  overflow:hidden;
+  background:linear-gradient(180deg,var(--cap-1) 0%,var(--cap-2) 100%);
+  border:1px solid var(--cap-bd);border-bottom:2px solid var(--cap-edge);
+  border-radius:calc(var(--u)*.1);
+  box-shadow:var(--cap-shadow), inset 0 1px 0 var(--cap-hi);
+  color:var(--ink);font-weight:500;
+  cursor:pointer;user-select:none;
+  transition:transform .05s ease, box-shadow .14s ease, border-color .14s ease;
+}
+.cap::before{                              /* 热度着色层 */
+  content:"";position:absolute;inset:0;border-radius:inherit;
+  background:linear-gradient(180deg,#fb64b6,#c94fa0);
+  opacity:0;transition:opacity .3s ease;pointer-events:none;
+}
+.body.heat .cap::before{opacity:calc(var(--h,0)*.94)}
+.body.heat .cap.hot{color:#fff}
+.body.heat .cap.hot .sub{color:rgba(255,255,255,.82)}
+.body.heat .cap.hot .leg{text-shadow:0 1px 2px rgba(0,0,0,.35)}
+
+.cap .leg{
+  position:relative;z-index:1;display:flex;align-items:baseline;justify-content:center;
+  gap:.32em;line-height:1;white-space:nowrap;
+}
+.cap .sub{color:var(--ink-soft)}
+[data-theme="dark"] .cap{font-weight:600}
+.cap .cnt{
+  position:absolute;z-index:1;right:calc(var(--u)*.06);bottom:calc(var(--u)*.02);
+  font-size:calc(var(--u)*.115);font-weight:700;font-variant-numeric:tabular-nums;
+  opacity:0;transition:opacity .2s ease;color:#a83273;
+}
+[data-theme="light"] .cap .cnt{color:#b5306f}
+[data-theme="dark"]  .cap .cnt{color:#fb64b6}
+.body.heat .cap .cnt{opacity:.92}
+.body.heat .cap.hot .cnt{color:rgba(255,255,255,.92)}
+.cap.blank .leg{color:transparent}
+
+/* ---------- 交互 ---------- */
+.cap:hover{border-color:#fb64b6;box-shadow:0 2px 10px rgba(251,100,182,.32), inset 0 1px 0 var(--cap-hi)}
+.cap:active{transform:translateY(1px);border-bottom-width:1px}
+.cap.flash{animation:flash .34s ease}
+@keyframes flash{
+  0%{transform:translateY(1px);border-bottom-width:1px;background:#fb64b6;color:#fff}
+  100%{transform:none;border-bottom-width:2px}
+}
+
+.tip{
+  position:fixed;z-index:99;pointer-events:none;transform:translate(-50%,-100%);
+  background:rgba(22,25,36,.94);color:#fff;
+  font-size:12px;font-weight:600;line-height:1;white-space:nowrap;
+  padding:7px 10px;border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.3);
+  opacity:0;transition:opacity .12s ease;
+}
+.tip.on{opacity:1}
+.tip b{color:#fb64b6;font-variant-numeric:tabular-nums}
+
+/* ---------- 图注 ---------- */
+.foot{width:100%;max-width:1180px;display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--ui-soft)}
+.scale{display:flex;align-items:center;gap:8px}
+.scale .bar{width:130px;height:8px;border-radius:4px;border:1px solid var(--ui-bd);
+  background:linear-gradient(90deg,var(--cap-1),rgba(251,100,182,.45) 50%,#fb64b6)}
+.foot .hint{font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <span class="title">键盘布局</span>
+  <span class="meta">104 键美式 · 22.4u × 6 行 · 单变量等比缩放</span>
+  <span class="sp"></span>
+  <div class="seg" id="themeSeg">
+    <button data-theme="ref" class="on">原图灰阶</button>
+    <button data-theme="light">应用浅色</button>
+    <button data-theme="dark">应用深色</button>
+  </div>
+  <button class="chip" id="heatBtn"><span class="dot"></span>敲击热度</button>
+</div>
+
+<div id="kbdBoard">
+  <div class="plate">
+    <div class="body" id="body"></div>
+  </div>
+</div>
+
+<div class="foot">
+  <div class="scale">轻<span class="bar"></span>重</div>
+  <div class="hint" id="footHint">共 104 个键位 · 悬停看键名与次数 · 按 u 精确定位，零头键宽不靠凑</div>
+</div>
+
+<div class="tip" id="tip"></div>
+
+<script>
+/* ============================================================================
+   键位数据：[图例, 行, 起始位置(u), 宽度(u), 占几行]
+   图例为字符串 = 单行；为数组 = [未按 Shift, 按下 Shift] 成对同行显示
+   列位取自参考图实测：Esc 0 ／ F1 2 ／ F5 6.5 ／ F9 11 ／ PrtSc 15.2 ／ 右端 18.2
+   ========================================================================= */
+const KEYS = [
+  /* ── Row 0 功能键区（不铺满整行：PrtSc 组止于 18.2u，右侧留空与原图一致） ── */
+  ['Esc',0,0,1],
+  ['F1',0,2,1],['F2',0,3,1],['F3',0,4,1],['F4',0,5,1],
+  ['F5',0,6.5,1],['F6',0,7.5,1],['F7',0,8.5,1],['F8',0,9.5,1],
+  ['F9',0,11,1],['F10',0,12,1],['F11',0,13,1],['F12',0,14,1],
+  ['PrtSc',0,15.2,1],['ScrLk',0,16.2,1],['Pause',0,17.2,1],
+
+  /* ── Row 1 数字行 ｜ Ins/Home/PgUp ｜ 数字区首行 ── */
+  [['`','~'],1,0,1],[['1','!'],1,1,1],[['2','@'],1,2,1],[['3','#'],1,3,1],
+  [['4','$'],1,4,1],[['5','%'],1,5,1],[['6','^'],1,6,1],[['7','&'],1,7,1],
+  [['8','*'],1,8,1],[['9','('],1,9,1],[['0',')'],1,10,1],
+  [['-','_'],1,11,1],[['=','+'],1,12,1],
+  ['Backspace',1,13,2],
+  ['Ins',1,15.2,1],['Home',1,16.2,1],['PgUp',1,17.2,1],
+  ['Num',1,18.4,1],['/',1,19.4,1],['*',1,20.4,1],['-',1,21.4,1],
+
+  /* ── Row 2 Tab 行 ｜ Del/End/PgDn ｜ 数字区（末列「+」占 2 行） ── */
+  ['Tab',2,0,1.5],['Q',2,1.5,1],['W',2,2.5,1],['E',2,3.5,1],['R',2,4.5,1],
+  ['T',2,5.5,1],['Y',2,6.5,1],['U',2,7.5,1],['I',2,8.5,1],['O',2,9.5,1],
+  ['P',2,10.5,1],[['[','{'],2,11.5,1],[[']','}'],2,12.5,1],[['\\','|'],2,13.5,1.5],
+  ['Del',2,15.2,1],['End',2,16.2,1],['PgDn',2,17.2,1],
+  ['7',2,18.4,1],['8',2,19.4,1],['9',2,20.4,1],
+  ['+',2,21.4,1,2],
+
+  /* ── Row 3 Caps 行（中列簇此行留空）｜ 数字区 4/5/6 ── */
+  ['Caps',3,0,1.75],['A',3,1.75,1],['S',3,2.75,1],['D',3,3.75,1],['F',3,4.75,1],
+  ['G',3,5.75,1],['H',3,6.75,1],['J',3,7.75,1],['K',3,8.75,1],['L',3,9.75,1],
+  [[';',':'],3,10.75,1],[["'",'"'],3,11.75,1],
+  ['Enter',3,12.75,2.25],
+  ['4',3,18.4,1],['5',3,19.4,1],['6',3,20.4,1],
+
+  /* ── Row 4 Shift 行 ｜ ↑ ｜ 数字区（末列 Enter 占 2 行） ── */
+  ['Shift',4,0,2.25],['Z',4,2.25,1],['X',4,3.25,1],['C',4,4.25,1],['V',4,5.25,1],
+  ['B',4,6.25,1],['N',4,7.25,1],['M',4,8.25,1],
+  [[',','<'],4,9.25,1],[['.','>'],4,10.25,1],[['/','?'],4,11.25,1],
+  ['Shift',4,12.25,2.75],
+  ['↑',4,16.2,1],
+  ['1',4,18.4,1],['2',4,19.4,1],['3',4,20.4,1],
+  ['Enter',4,21.4,1,2],
+
+  /* ── Row 5 底行：Ctrl Win Alt ｜ Space 6.25u ｜ Alt Win Fn Ctrl ｜ ← ↓ → ｜ 0(2u) . ── */
+  ['Ctrl',5,0,1.25],['Win',5,1.25,1.25],['Alt',5,2.5,1.25],
+  ['Space',5,3.75,6.25],
+  ['Alt',5,10,1.25],['Win',5,11.25,1.25],['Fn',5,12.5,1.25],['Ctrl',5,13.75,1.25],
+  ['←',5,15.2,1],['↓',5,16.2,1],['→',5,17.2,1],
+  ['0',5,18.4,2],['.',5,20.4,1],
+];
+
+/* 字号按图例长度自适应：长键名自动缩小，永不溢出 / 裁切 */
+const FS = {1:.225, 2:.215, 3:.2, 4:.185, 5:.172, 6:.16, 9:.145};
+const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const seeded = seed => { let s = seed; return () => { s = (s*9301 + 49297) % 233280; return s/233280; }; };
+
+const body = document.getElementById('body');
+const tip  = document.getElementById('tip');
+const PAD  = 0.025;     /* 键两侧各内缩 0.025u → 相邻键可见间隙 0.05u */
+
+KEYS.forEach(([leg, row, col, wide, rowspan]) => {
+  const el = document.createElement('div');
+  el.className = 'cap';
+  el.style.left   = 'calc(var(--u) * ' + (col + PAD) + ')';
+  el.style.top    = 'calc(var(--u) * ' + row + ')';
+  el.style.width  = 'calc(var(--u) * ' + (wide - PAD*2) + ')';
+  el.style.height = 'calc(var(--u) * ' + (rowspan === 2 ? 1.94 : 0.94) + ')';
+
+  const isPair = Array.isArray(leg);
+  const name   = isPair ? leg[0] : leg;
+  const glyphs = isPair ? leg[0] + leg[1] : leg;
+  el.style.fontSize = 'calc(var(--u) * ' + (FS[glyphs.length] || .145) + ')';
+
+  el.innerHTML = '<span class="leg"></span><span class="cnt"></span>';
+  const l = el.querySelector('.leg');
+  if (name === 'Space') { el.classList.add('blank'); l.textContent = '\u00a0'; }
+  else if (isPair)      { l.innerHTML = '<span>' + esc(leg[0]) + '</span><span class="sub">' + esc(leg[1]) + '</span>'; }
+  else                  { l.textContent = name; }
+
+  el.dataset.key = name;
+  el.dataset.caption = isPair ? (leg[0] + ' / ' + leg[1]) : (name === 'Space' ? 'Space' : name);
+  body.appendChild(el);
+});
+
+/* ---------- 热度数据（演示用；接入时换成真实计数即可） ---------- */
+const rnd = seeded(20260920);
+const HOT_FIRST = { Space:1, E:.86, T:.82, A:.88, O:.85, I:.84, N:.85, R:.79, S:.83, H:.78,
+                    Ctrl:.92, Shift:.8, Enter:.76, Backspace:.74, Tab:.62, C:.72, V:.7, Z:.58, L:.66 };
+const DIM = ['PrtSc','ScrLk','Pause','Num','Fn','Win','↑','↓','←','→','Ins','Del','Home','End','PgUp','PgDn'];
+const counts = {};
+const caps = [...document.querySelectorAll('.cap')];
+caps.forEach(el => {
+  const k = el.dataset.key;
+  let b = HOT_FIRST[k] !== undefined ? HOT_FIRST[k] : rnd();
+  if (/^[A-Z]$/.test(k)) b = .45 + b * .5;
+  if (/^F\d+$/.test(k) || DIM.includes(k)) b *= .35;
+  counts[k] = Math.round(b * 268000) + 120;
+});
+const maxCount = Math.max(...Object.values(counts));
+caps.forEach(el => {
+  const k = el.dataset.key, h = counts[k] / maxCount;
+  el.style.setProperty('--h', h.toFixed(3));
+  el.querySelector('.cnt').textContent = counts[k] >= 10000 ? (counts[k]/1000).toFixed(1) + 'k' : counts[k];
+  if (h > .72) el.classList.add('hot');
+});
+
+/* ---------- 等比缩放：只写 --u ---------- */
+/* 板宽 = 2×0.24u(内边距) + 22.4u(键区) = 22.88u */
+const board = document.getElementById('kbdBoard');
+const fit = () => { const w = board.clientWidth; if (w > 0) board.style.setProperty('--u', (w / 22.88) + 'px'); };
+new ResizeObserver(fit).observe(board);
+fit();
+
+/* ---------- 主题 / 热度开关 ---------- */
+document.getElementById('themeSeg').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  document.querySelectorAll('#themeSeg button').forEach(x => x.classList.toggle('on', x === b));
+  document.documentElement.dataset.theme = b.dataset.theme;
+});
+const heatBtn = document.getElementById('heatBtn');
+heatBtn.addEventListener('click', () => {
+  const on = body.classList.toggle('heat');
+  heatBtn.classList.toggle('on', on);
+  document.getElementById('footHint').textContent = on
+    ? '颜色越深敲击越多 · 右下角为该键累计次数 · 悬停看明细'
+    : '共 104 个键位 · 悬停看键名与次数 · 按 u 精确定位，零头键宽不靠凑';
+});
+
+/* ---------- 悬停提示 + 按下反馈 ---------- */
+caps.forEach(el => {
+  el.addEventListener('mouseenter', () => {
+    const k = el.dataset.key;
+    tip.innerHTML = el.dataset.caption + ' &nbsp;<b>' + counts[k].toLocaleString('en-US') + '</b> 次';
+    const r = el.getBoundingClientRect();
+    tip.style.left = (r.left + r.width/2) + 'px';
+    tip.style.top  = (r.top - 8) + 'px';
+    tip.classList.add('on');
+  });
+  el.addEventListener('mouseleave', () => tip.classList.remove('on'));
+  el.addEventListener('click', () => { el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); });
+});
+window.addEventListener('scroll', () => tip.classList.remove('on'), true);
+</script>
+</body>
+</html>

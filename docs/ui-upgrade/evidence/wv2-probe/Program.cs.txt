@@ -1,0 +1,201 @@
+using System.Diagnostics;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Windows;
+using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.Wpf;
+
+namespace Wv2Probe;
+
+/// <summary>
+/// 实测 WebView2「懒加载 → 用 → 释放」三轮循环，判据是常驻部分会不会被拖累、以及反复开关会不会涨台阶。
+/// 关键指标用私有字节（PrivateMemorySize64）而非工作集：工作集不回落不等于内存没还回去。
+/// 结果写 probe-result.txt。运行完自动退出。
+/// </summary>
+public static class Program
+{
+    const string OutFile = @"D:\code\XAssistant\temp\wv2-probe\probe-result.txt";
+    const string TargetPage = @"file:///D:/code/XAssistant/temp/ui-design/v4/index.html";
+    const int Cycles = 3;
+    static readonly StringBuilder SB = new();
+
+    [DllImport("psapi.dll", SetLastError = true)]
+    static extern bool EmptyWorkingSet(IntPtr hProcess);
+
+    static void L(string s)
+    {
+        SB.AppendLine(s);
+        File.WriteAllText(OutFile, SB.ToString(), new UTF8Encoding(false));
+    }
+
+    static (long ws, long pv, int th) Self()
+    {
+        using var p = Process.GetCurrentProcess();
+        p.Refresh();
+        return (p.WorkingSet64, p.PrivateMemorySize64, p.Threads.Count);
+    }
+
+    static string SelfStr()
+    {
+        var (ws, pv, th) = Self();
+        return "工作集 " + MB(ws) + " / 私有 " + MB(pv) + " / 线程 " + th;
+    }
+
+    static HashSet<int> EdgePids() => Process.GetProcessesByName("msedgewebview2").Select(x => x.Id).ToHashSet();
+
+    static (int n, long ws, long pv) EdgeStats(HashSet<int> only)
+    {
+        int n = 0;
+        long w = 0,
+            v = 0;
+        foreach (var p in Process.GetProcessesByName("msedgewebview2"))
+        {
+            if (only != null && !only.Contains(p.Id))
+                continue;
+            try
+            {
+                n++;
+                w += p.WorkingSet64;
+                v += p.PrivateMemorySize64;
+            }
+            catch { }
+        }
+        return (n, w, v);
+    }
+
+    static string MB(long b) => (b / 1048576.0).ToString("N1") + " MB";
+
+    static void Sample(string label, HashSet<int> prior)
+    {
+        var mine = EdgePids().Except(prior).ToHashSet();
+        var s = EdgeStats(mine);
+        L(
+            "    "
+                + label
+                + " | 自身 "
+                + SelfStr()
+                + " | WebView2 子进程 "
+                + s.n
+                + " 个 工作集 "
+                + MB(s.ws)
+                + " 私有 "
+                + MB(s.pv)
+                + " | 合计私有 "
+                + MB(Self().pv + s.pv)
+        );
+    }
+
+    [STAThread]
+    public static void Main()
+    {
+        var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+        app.Startup += async (s, e) =>
+        {
+            try
+            {
+                await Run();
+            }
+            catch (Exception ex)
+            {
+                L("EXCEPTION: " + ex);
+            }
+            app.Shutdown();
+        };
+        app.Run();
+    }
+
+    static async Task Run()
+    {
+        var prior = EdgePids();
+        L("=== WebView2 成本实测（懒加载 / 释放 / 反复开关）===");
+        L("时间: " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+        try
+        {
+            L("可用运行时版本: " + CoreWebView2Environment.GetAvailableBrowserVersionString());
+        }
+        catch (Exception ex)
+        {
+            L("可用运行时版本: 取不到 -> " + ex.Message);
+        }
+        L("机器上已有 msedgewebview2 进程: " + prior.Count + " 个（属其他 app，不计入）");
+        L("");
+        L("[基线] 宿主未创建 WebView2: " + SelfStr());
+        L("");
+
+        var udf = @"D:\code\XAssistant\temp\wv2-probe\udf";
+        var sw = Stopwatch.StartNew();
+        var env = await CoreWebView2Environment.CreateAsync(null, udf, null);
+        L("[环境] CreateAsync 耗时 " + sw.ElapsedMilliseconds + " ms（只做一次，可跨轮复用）: " + SelfStr());
+        L("");
+
+        long firstFrameMs = -1;
+        for (int c = 1; c <= Cycles; c++)
+        {
+            L("--- 第 " + c + " 轮：打开主窗 ---");
+            var wv = new WebView2();
+            var win = new Window
+            {
+                Width = 1400,
+                Height = 900,
+                Title = "WV2 PROBE " + c,
+                Content = wv,
+                WindowStartupLocation = WindowStartupLocation.CenterScreen,
+            };
+            sw.Restart();
+            win.Show();
+            await wv.EnsureCoreWebView2Async(env);
+            var tCore = sw.ElapsedMilliseconds;
+
+            var tcs = new TaskCompletionSource<bool>();
+            wv.NavigationCompleted += (a, b) => tcs.TrySetResult(true);
+            var tNav = Stopwatch.StartNew();
+            wv.Source = new Uri(TargetPage);
+            var done = await Task.WhenAny(tcs.Task, Task.Delay(30000));
+            var tFrame = sw.ElapsedMilliseconds;
+            if (c == 1)
+                firstFrameMs = tFrame;
+
+            L("    Show->CoreReady " + tCore + " ms / Show->首帧 " + tFrame + " ms / 成功=" + (done == tcs.Task));
+            await Task.Delay(4000);
+            Sample("首帧后静置 4s", prior);
+
+            // 释放：与真实 app「关窗到托盘」一致
+            win.Content = null;
+            win.Close();
+            wv.Dispose();
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            for (int i = 1; i <= 5; i++)
+            {
+                await Task.Delay(1000);
+                if (i == 5)
+                    Sample("释放 5s 后", prior);
+            }
+            // 强制回收工作集，看真实地板
+            EmptyWorkingSet(Process.GetCurrentProcess().Handle);
+            foreach (var p in Process.GetProcessesByName("msedgewebview2"))
+                if (!prior.Contains(p.Id))
+                {
+                    try
+                    {
+                        EmptyWorkingSet(p.Handle);
+                    }
+                    catch { }
+                }
+            await Task.Delay(500);
+            Sample("再 trim 工作集", prior);
+            L("");
+        }
+
+        L("[汇总] 三轮开关后的常驻状态: " + SelfStr());
+        var mine = EdgePids().Except(prior).ToHashSet();
+        var s = EdgeStats(mine);
+        L("        残留 WebView2 子进程: " + s.n + " 个 / 私有 " + MB(s.pv));
+        L("        常驻合计私有: " + MB(Self().pv + s.pv));
+        L("        冷启动到首帧（第 1 轮）: " + firstFrameMs + " ms");
+        L("CPU 时间累计: " + Process.GetCurrentProcess().TotalProcessorTime.TotalSeconds.ToString("N2") + " s");
+        L("=== 结束 ===");
+    }
+}
