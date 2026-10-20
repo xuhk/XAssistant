@@ -54,6 +54,18 @@ public class UsageTrackingService : BackgroundService
             )
             """;
         cmd.ExecuteNonQuery();
+
+        // 心跳：每次落盘时顺手记「最后一次确认还活着」的时刻与累计秒数。
+        // 断电 / 强杀时进程走不到 Dispose，下次启动只能靠它补一条 ServiceStopped。
+        cmd.CommandText = """
+            CREATE TABLE IF NOT EXISTS ServiceHeartbeat (
+                Id INTEGER PRIMARY KEY CHECK (Id = 1),
+                Timestamp TEXT NOT NULL,
+                Date TEXT NOT NULL,
+                TotalSeconds INTEGER NOT NULL
+            )
+            """;
+        cmd.ExecuteNonQuery();
     }
 
     // 线程安全的“获取今日总秒数”
@@ -111,6 +123,7 @@ public class UsageTrackingService : BackgroundService
             CheckDayRollover();
             LogEvent("Resume");
             StartSession();
+            WriteHeartbeat(GetTodaySeconds());
             _logger.LogInformation("System resumed, new session started.");
         }
     }
@@ -141,6 +154,129 @@ public class UsageTrackingService : BackgroundService
         cmd.Parameters.AddWithValue("$date", _todayDate.ToString("yyyy-MM-dd"));
         cmd.Parameters.AddWithValue("$seconds", seconds);
         cmd.ExecuteNonQuery();
+
+        try
+        {
+            WriteHeartbeat(conn, seconds, DateTime.Now, _todayDate);
+        }
+        catch (Exception ex)
+        {
+            // 心跳只是补边界用的辅助数据，写不进去不能影响 DailyUsage
+            _logger.LogWarning(ex, "写入心跳失败");
+        }
+    }
+
+    private void WriteHeartbeat(long seconds)
+    {
+        try
+        {
+            using var conn = new SqliteConnection($"Data Source={DbPath}");
+            conn.Open();
+            WriteHeartbeat(conn, seconds, DateTime.Now, _todayDate);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "写入心跳失败");
+        }
+    }
+
+    private static void WriteHeartbeat(
+        SqliteConnection conn,
+        long seconds,
+        DateTime timestamp,
+        DateTime date
+    )
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO ServiceHeartbeat (Id, Timestamp, Date, TotalSeconds)
+            VALUES (1, $timestamp, $date, $seconds)
+            ON CONFLICT(Id) DO UPDATE SET
+                Timestamp = $timestamp,
+                Date = $date,
+                TotalSeconds = $seconds
+            """;
+        cmd.Parameters.AddWithValue("$timestamp", timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff"));
+        cmd.Parameters.AddWithValue("$date", date.ToString("yyyy-MM-dd"));
+        cmd.Parameters.AddWithValue("$seconds", seconds);
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// 上次进程没有走到 Dispose（断电 / 强杀 / 被杀）时，最后一条 SessionEvents 会停在
+    /// ServiceStarted 或 Resume。用最后一次心跳补一条 ServiceStopped 把区间闭合；
+    /// 补的时间是「最后一次确认还活着」，不会把停机空档算进去。
+    /// </summary>
+    private void BackfillStopEventIfNeeded()
+    {
+        try
+        {
+            using var conn = new SqliteConnection($"Data Source={DbPath}");
+            conn.Open();
+
+            string? lastType;
+            string? lastTimestamp;
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText =
+                    "SELECT EventType, Timestamp FROM SessionEvents ORDER BY Id DESC LIMIT 1";
+                using var reader = cmd.ExecuteReader();
+                if (!reader.Read())
+                    return;
+                lastType = reader.GetString(0);
+                lastTimestamp = reader.GetString(1);
+            }
+
+            // Suspend / ServiceStopped 本身就是闭合事件，不需要补
+            if (
+                lastType is null
+                || lastTimestamp is null
+                || lastType is "Suspend" or "ServiceStopped"
+            )
+                return;
+
+            string? heartbeatTimestamp;
+            string? heartbeatDate;
+            long heartbeatSeconds;
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText =
+                    "SELECT Timestamp, Date, TotalSeconds FROM ServiceHeartbeat WHERE Id = 1";
+                using var reader = cmd.ExecuteReader();
+                if (!reader.Read())
+                    return;
+                heartbeatTimestamp = reader.GetString(0);
+                heartbeatDate = reader.GetString(1);
+                heartbeatSeconds = reader.GetInt64(2);
+            }
+
+            // 心跳必须晚于最后一条「开始」事件；更早的心跳属于上一轮，不能拿来补
+            if (string.CompareOrdinal(heartbeatTimestamp, lastTimestamp) <= 0)
+                return;
+
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = """
+                    INSERT INTO SessionEvents (EventType, Timestamp, Date, TotalSeconds)
+                    VALUES ('ServiceStopped', $timestamp, $date, $seconds)
+                    """;
+                cmd.Parameters.AddWithValue("$timestamp", heartbeatTimestamp);
+                cmd.Parameters.AddWithValue("$date", heartbeatDate);
+                cmd.Parameters.AddWithValue("$seconds", heartbeatSeconds);
+                cmd.ExecuteNonQuery();
+            }
+
+            _logger.LogWarning(
+                "上次未正常收尾（最后事件 {LastType} @ {LastTimestamp}），已在心跳 {Heartbeat} 补写 ServiceStopped",
+                lastType,
+                lastTimestamp,
+                heartbeatTimestamp
+            );
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "补写上次未收尾的 ServiceStopped 失败");
+        }
     }
 
     private long LoadTodaySeconds()
@@ -193,6 +329,9 @@ public class UsageTrackingService : BackgroundService
         // 确保数据库及表结构存在
         InitializeDatabase();
 
+        // 先补上次没收尾的边界，再写本次的 ServiceStarted（顺序不能反）
+        BackfillStopEventIfNeeded();
+
         // 如果需要，处理跨天
         CheckDayRollover();
         if (!_isRunning)
@@ -201,6 +340,7 @@ public class UsageTrackingService : BackgroundService
         }
 
         LogEvent("ServiceStarted");
+        WriteHeartbeat(GetTodaySeconds());
 
         _logger.LogInformation(
             "Service started. Listening on named pipe with periodic save every {Interval}s.",
@@ -240,6 +380,10 @@ public class UsageTrackingService : BackgroundService
                 {
                     _logger.LogWarning(ex, "Failed to respond to pipe client");
                 }
+
+                // 客户端轮询同样要把秒表里的时长落库，否则只要 UI 在轮询，
+                // 7 秒定时保存就永远不会触发（2026-10-10 实测库里的当日值一直滞后）。
+                SaveSessionAndRestart();
             }
             else
             {
@@ -264,19 +408,25 @@ public class UsageTrackingService : BackgroundService
                 }
 
                 // 正常执行定时保存
-                StopSessionAndSave(); // 将秒表累积写入数据库
-                CheckDayRollover(); // 检查跨天
-                if (!_isSuspended)
-                {
-                    StartSession();
-                }
-                else
-                {
-                    _logger.LogDebug("Skipping session start because system is suspended.");
-                }
+                SaveSessionAndRestart();
             }
 
             server.Dispose();
+        }
+    }
+
+    /// <summary>把秒表里的时长落库，处理跨天，再按挂起状态决定是否重新计时。</summary>
+    private void SaveSessionAndRestart()
+    {
+        StopSessionAndSave();
+        CheckDayRollover();
+        if (!_isSuspended)
+        {
+            StartSession();
+        }
+        else
+        {
+            _logger.LogDebug("Skipping session start because system is suspended.");
         }
     }
 
