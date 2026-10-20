@@ -23,6 +23,24 @@ public sealed class ProcessUsageTracker : IDisposable
     private readonly ConcurrentDictionary<uint, string> _pidToAppName = new();
     private readonly ConcurrentDictionary<uint, PendingProcessInfo> _pendingProcesses = new();
 
+    /// <summary>
+    /// 「可以续接」的会话：键 = 规范化进程名 + "|" + 开始时间，值 = 那行会话的 Id。
+    ///
+    /// <para>
+    /// 装的都是**今天**、且**已经被关掉**（EndTime 非空）的行 —— 也就是上一次正常退出
+    /// （<see cref="Stop"/> 会把活跃会话按结束写库）留下的那些。下次启动时如果同一个进程还在跑
+    /// （OS 层的 StartTime 没变），就该**续上这一行**，而不是再插一条新行。
+    /// </para>
+    ///
+    /// <para>
+    /// 不这么做会怎样（2026-09-29 实测）：chrome 08:23:40 启动 → 10:41:35 退出程序时把这一行
+    /// 按 8,274 秒关掉 → 10:41:35 重新启动后 <see cref="CaptureExistingProcesses"/> 又按
+    /// "进程的 08:23:40 启动时间"插一条新行 → 同一个 StartTime 有两行，当天时长按两遍算
+    /// （界面显示 5.16h，真实 2.30h；当天 7 个常驻进程全部翻倍）。
+    /// </para>
+    /// </summary>
+    private readonly Dictionary<string, long> _resumableSessions = new(StringComparer.Ordinal);
+
     private ManagementEventWatcher? _startWatcher;
     private ManagementEventWatcher? _stopWatcher;
     private Timer? _titleRefreshTimer;
@@ -42,7 +60,8 @@ public sealed class ProcessUsageTracker : IDisposable
     {
         _cts = new CancellationTokenSource();
         InitializeDatabase();
-        RecoverUnfinishedSessions(); // 恢复未完成的会话
+        RecoverUnfinishedSessions(); // 恢复未完成的会话（上次是被杀掉的情况）
+        SnapshotResumableSessions(); // 上次是**正常退出**留下的行（见方法注释）
         CaptureExistingProcesses();
         StartWatchers();
 
@@ -376,6 +395,144 @@ public sealed class ProcessUsageTracker : IDisposable
         return null;
     }
 
+    // ==================== 续接上次正常退出留下的会话 ====================
+
+    /// <summary>
+    /// 记下今天那些**已经结束**的会话（键 = 进程名 + 开始时间），供
+    /// <see cref="OpenSessionFor"/> 判断"这个进程是不是该续上老行"。
+    ///
+    /// <para>
+    /// 判据是"进程名 + **精确到毫秒**的 OS 启动时间"。同一个进程实例只可能有一条这样的记录，
+    /// 所以只要还能枚举到这个启动时间相同的进程，就说明那次运行从没真正结束过 —— 不需要任何
+    /// "多久算近"的时间启发式。同组里若已经有老 bug 留下的重复行，取累计最大的那条续接。
+    /// </para>
+    /// </summary>
+    private void SnapshotResumableSessions()
+    {
+        _resumableSessions.Clear();
+        try
+        {
+            string today = DateTime.Today.ToString("yyyy-MM-dd");
+            var found = new Dictionary<string, (long Id, double Acc)>(StringComparer.Ordinal);
+
+            using var conn = new SqliteConnection($"Data Source={_dbPath}");
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT Id, ProcessName, StartTime, AccumulatedSeconds
+                FROM ProcessSession
+                WHERE EndTime IS NOT NULL AND Date = $today
+                ORDER BY AccumulatedSeconds
+                """;
+            cmd.Parameters.AddWithValue("$today", today);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                long id = reader.GetInt64(0);
+                string name = NormalizeProcessName(reader.GetString(1));
+                string start = reader.GetString(2);
+                double acc = reader.IsDBNull(3) ? 0 : reader.GetDouble(3);
+
+                // 升序读进来、后写覆盖先写 → 留下的就是累计最大的那条
+                found[$"{name}|{start}"] = (id, acc);
+            }
+
+            foreach (var pair in found)
+                _resumableSessions[pair.Key] = pair.Value.Id;
+
+            if (_resumableSessions.Count > 0)
+                _logger.LogInformation(
+                    "可续接的会话 {Count} 条（今天已结束、进程可能还在跑的那些）",
+                    _resumableSessions.Count
+                );
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "读取可续接会话失败");
+        }
+    }
+
+    /// <summary>
+    /// 第一次见到这个进程时开一条会话：能续上上次正常退出留下的老行就续，否则新插一条。
+    ///
+    /// <para>
+    /// 续接时把 <c>EndTime</c> 清回 NULL、累计时长按"进程启动到现在"重算 —— 因为那条老行记的是
+    /// 同一次连续运行的前半段，被程序退出硬切了一刀，合起来才是完整的一段。
+    /// </para>
+    ///
+    /// <para>
+    /// **为什么"精确匹配启动时间"就够了，不需要"多久算近"的启发式**：能走到这里说明这个进程
+    /// 通过了 <see cref="IsUserApplication"/>（有主窗口、不是 Session 0、不在 Windows 目录、
+    /// 不在系统进程名单里）。同一个进程名通常只有一个这样的进程，而它的 OS 启动时间在同一日期下
+    /// 是唯一的 —— 能匹配上，就说明那次运行确实没结束过。
+    /// </para>
+    /// </summary>
+    private AppSessionState OpenSessionFor(string appName, DateTime startTime, string? windowTitle)
+    {
+        string? title = string.IsNullOrWhiteSpace(windowTitle) ? null : windowTitle.Trim();
+        string key = $"{appName.ToLowerInvariant()}|{startTime:yyyy-MM-dd HH:mm:ss.fff}";
+
+        if (_resumableSessions.Remove(key, out long existingId))
+        {
+            var now = DateTime.Now;
+            double accumulated = Math.Max(0, (now - startTime).TotalSeconds);
+            ResumeSession(existingId, accumulated, now);
+
+            _logger.LogInformation(
+                "续接会话：{App}（{Start:HH:mm:ss} 起，累计 {Minutes:0} 分钟），不另建新行 Id={Id}",
+                appName,
+                startTime,
+                accumulated / 60,
+                existingId
+            );
+
+            return new AppSessionState
+            {
+                ProcessCount = 1,
+                SessionId = existingId,
+                StartTime = startTime,
+                LastUpdateTime = now,
+                AccumulatedSeconds = accumulated,
+                LastWindowTitle = title,
+            };
+        }
+
+        long sessionId = InsertAppSession(appName, startTime);
+        return new AppSessionState
+        {
+            ProcessCount = 1,
+            SessionId = sessionId,
+            StartTime = startTime,
+            LastUpdateTime = startTime,
+            AccumulatedSeconds = 0,
+            LastWindowTitle = title,
+        };
+    }
+
+    /// <summary>把一条已结束的会话重新打开（EndTime 清空、累计重算、最后更新设为现在）。</summary>
+    private void ResumeSession(long sessionId, double accumulatedSeconds, DateTime updateTime)
+    {
+        try
+        {
+            using var conn = new SqliteConnection($"Data Source={_dbPath}");
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                UPDATE ProcessSession
+                SET EndTime = NULL, AccumulatedSeconds = $acc, LastUpdateTime = $time
+                WHERE Id = $id
+                """;
+            cmd.Parameters.AddWithValue("$acc", accumulatedSeconds);
+            cmd.Parameters.AddWithValue("$time", updateTime.ToString("yyyy-MM-dd HH:mm:ss.fff"));
+            cmd.Parameters.AddWithValue("$id", sessionId);
+            cmd.ExecuteNonQuery();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "续接会话失败 Id={Id}", sessionId);
+        }
+    }
+
     // ==================== 现有进程捕获 ====================
     private void CaptureExistingProcesses()
     {
@@ -558,22 +715,7 @@ public sealed class ProcessUsageTracker : IDisposable
         _pidToAppName[processId] = appName;
         _appSessions.AddOrUpdate(
             appName,
-            _ =>
-            {
-                var sessionId = InsertAppSession(appName, startTime);
-                var state = new AppSessionState
-                {
-                    ProcessCount = 1,
-                    SessionId = sessionId,
-                    StartTime = startTime,
-                    LastUpdateTime = startTime,
-                    AccumulatedSeconds = 0,
-                    LastWindowTitle = string.IsNullOrWhiteSpace(windowTitle)
-                        ? null
-                        : windowTitle.Trim(),
-                };
-                return state;
-            },
+            _ => OpenSessionFor(appName, startTime, windowTitle),
             (_, state) =>
             {
                 Interlocked.Increment(ref state.ProcessCount);
