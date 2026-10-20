@@ -127,6 +127,7 @@ public partial class App : System.Windows.Application
         services.AddSingleton<IStartupService>(sp => sp.GetRequiredService<StartupService>());
         services.AddSingleton<IKeyboardHookService, KeyboardHookService>();
         services.AddSingleton<IKeyDatabaseService, KeyDatabaseService>();
+        services.AddSingleton<IKeyPressPersistenceService, KeyPressPersistenceService>();
         services.AddSingleton<ClickCounterViewModel>();
         services.AddSingleton<KeyCounterViewModel>();
         services.AddSingleton<MainWindowViewModel>();
@@ -451,6 +452,12 @@ public partial class App : System.Windows.Application
         _appLogger?.LogInformation("系统正在关闭/注销，保存进程使用数据...");
         try
         {
+            var keyboardHook = Services.GetService<IKeyboardHookService>();
+            keyboardHook?.Stop();
+
+            var keyPersistence = Services.GetService<IKeyPressPersistenceService>();
+            keyPersistence?.FlushAndStop(TimeSpan.FromSeconds(3));
+
             var tracker = Services.GetRequiredService<ProcessUsageTracker>();
             tracker.Stop();
             tracker.Dispose();

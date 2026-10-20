@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Collections.Concurrent;
 using System.Windows.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -11,8 +12,11 @@ public partial class KeyCounterViewModel : ViewModelBase
 {
     private readonly IKeyboardHookService _hookService;
     private readonly IKeyDatabaseService _dbService;
+    private readonly IKeyPressPersistenceService _persistenceService;
     private readonly IConfigurationService _configService;
-    private DateTime _currentDate = DateTime.Today;
+    private readonly ConcurrentDictionary<string, int> _pendingUiCounts = new(StringComparer.Ordinal);
+    private int _uiUpdateScheduled;
+    private DateTime _displayDate = DateTime.Today;
 
     // 总计
     public ObservableCollection<KeyCountItem> KeyCounts { get; } = new();
@@ -47,11 +51,13 @@ public partial class KeyCounterViewModel : ViewModelBase
     public KeyCounterViewModel(
         IKeyboardHookService hookService,
         IKeyDatabaseService dbService,
+        IKeyPressPersistenceService persistenceService,
         IConfigurationService configService
     )
     {
         _hookService = hookService;
         _dbService = dbService;
+        _persistenceService = persistenceService;
         _configService = configService;
 
         _hookService.KeyPressed += OnKeyPressed;
@@ -75,41 +81,77 @@ public partial class KeyCounterViewModel : ViewModelBase
     {
         var record = new Models.KeyPressRecord { Key = key, PressTime = DateTime.Now };
 
-        // 持久化到数据库
-        _dbService.SaveKeyPress(record);
+        // This must stay non-blocking: OnKeyPressed runs inside the low-level keyboard hook.
+        _persistenceService.TryEnqueue(record);
+        _pendingUiCounts.AddOrUpdate(key, 1, static (_, count) => count + 1);
+        ScheduleUiUpdate();
+    }
 
-        // 检测是否跨天
-        DateTime today = DateTime.Today;
-        if (today > _currentDate)
+    private void ScheduleUiUpdate()
+    {
+        if (Interlocked.CompareExchange(ref _uiUpdateScheduled, 1, 0) != 0)
+            return;
+
+        _ = Task.Delay(TimeSpan.FromMilliseconds(50)).ContinueWith(
+            _ => WpfApplication.Current.Dispatcher.InvokeAsync(FlushPendingUiUpdates),
+            TaskScheduler.Default
+        );
+    }
+
+    private void FlushPendingUiUpdates()
+    {
+        try
         {
-            _currentDate = today;
-            // 重新加载所有时间段数据
-            LoadAllCounts();
-        }
-        else
-        {
-            // 未跨天，增量更新内存集合
-            WpfApplication.Current.Dispatcher.InvokeAsync(() =>
+            if (_displayDate != DateTime.Today)
             {
-                // 更新总计
-                UpdateCollection(KeyCounts, key);
-                // 更新今天
-                UpdateCollection(TodayKeyCounts, key);
+                _displayDate = DateTime.Today;
+                ReplaceCollection(DayBeforeYesterdayKeyCounts, YesterdayKeyCounts);
+                ReplaceCollection(YesterdayKeyCounts, TodayKeyCounts);
+                TodayKeyCounts.Clear();
+            }
 
-                // 集合变化后通知聚合属性
-                OnPropertyChanged(nameof(KeyTodayPresses));
-                OnPropertyChanged(nameof(KeyTotalPresses));
-            });
+            foreach (var entry in _pendingUiCounts.ToArray())
+            {
+                if (!_pendingUiCounts.TryRemove(entry.Key, out var increment))
+                    continue;
+
+                UpdateCollection(KeyCounts, entry.Key, increment);
+                UpdateCollection(TodayKeyCounts, entry.Key, increment);
+            }
+
+            OnPropertyChanged(nameof(KeyTodayPresses));
+            OnPropertyChanged(nameof(KeyTotalPresses));
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _uiUpdateScheduled, 0);
+            if (!_pendingUiCounts.IsEmpty)
+                ScheduleUiUpdate();
         }
     }
 
-    private void UpdateCollection(ObservableCollection<KeyCountItem> collection, string key)
+    private static void ReplaceCollection(
+        ObservableCollection<KeyCountItem> target,
+        IEnumerable<KeyCountItem> source
+    )
+    {
+        var snapshot = source
+            .Select(item => new KeyCountItem { Key = item.Key, Count = item.Count })
+            .ToList();
+        target.Clear();
+        foreach (var item in snapshot)
+        {
+            target.Add(item);
+        }
+    }
+
+    private void UpdateCollection(ObservableCollection<KeyCountItem> collection, string key, int increment = 1)
     {
         var item = collection.FirstOrDefault(x => x.Key == key);
         if (item != null)
-            item.Count++;
+            item.Count += increment;
         else
-            collection.Add(new KeyCountItem { Key = key, Count = 1 });
+            collection.Add(new KeyCountItem { Key = key, Count = increment });
     }
 
     private void LoadAllCounts()
@@ -163,6 +205,7 @@ public partial class KeyCounterViewModel : ViewModelBase
     private void StopRecording()
     {
         _hookService.Stop();
+        _persistenceService.Flush(TimeSpan.FromSeconds(3));
         IsRecording = false;
         _configService.SetKeyRecordingAutoStart(false);
     }
@@ -170,7 +213,7 @@ public partial class KeyCounterViewModel : ViewModelBase
     [RelayCommand]
     private void RefreshData()
     {
-        _currentDate = DateTime.Today;
+        _displayDate = DateTime.Today;
         LoadAllCounts();
     }
 }
