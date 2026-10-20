@@ -25,6 +25,8 @@
    powershell -ExecutionPolicy Bypass -File .\XAssistant.Service\install-service.ps1
    ```
 
+   后台服务随开机启动，请把整个文件夹放在本机固定磁盘（例如 `C:\`）；放在可能离线的副盘或移动盘上时，开机瞬间服务会因为找不到文件而起不来。
+
 4. 双击 `XAssistant.exe` 即可。
 5. 默认**不会**开机自启动。需要常驻统计的话，在应用界面左侧勾选"**开机自动启动**"，之后随系统登录自动运行。
 

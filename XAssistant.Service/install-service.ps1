@@ -74,6 +74,14 @@ if (-not $?) {
 Write-Host ">>> 设置服务描述..." -ForegroundColor Cyan
 sc.exe description $ServiceName $Description
 
+# 失败自动重启：开机瞬间盘还没就绪时服务会起不来（事件日志 7000），
+# 没有恢复动作就会一直缺席到下次手动启动。
+Write-Host ">>> 设置失败自动重启..." -ForegroundColor Cyan
+sc.exe failure $ServiceName reset= 86400 actions= restart/5000/restart/30000/restart/60000 | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Warning "设置失败自动重启失败，服务仍可手动启动。"
+}
+
 Write-Host ">>> 正在启动服务..." -ForegroundColor Cyan
 Start-Service $ServiceName
 Write-Host ">>> 服务 $ServiceName 已成功安装并启动。" -ForegroundColor Green

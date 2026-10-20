@@ -58,8 +58,11 @@ Write-Host "[4/5] 复制新文件到 $targetDir ..." -ForegroundColor Cyan
 # 确保目标目录存在
 New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
 
-# 清空目标目录（避免残留旧文件）
-Remove-Item "$targetDir\*" -Recurse -Force -ErrorAction SilentlyContinue
+# 清空目标目录（避免残留旧文件），但保留后台服务目录：
+# XAssistant.Service 由服务项目单独发布/安装，不属于主程序产物。
+Get-ChildItem -Path $targetDir -Force |
+    Where-Object { $_.Name -ne "XAssistant.Service" } |
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
 # 复制所有发布文件
 Copy-Item -Path "$publishDir\*" -Destination $targetDir -Recurse -Force
