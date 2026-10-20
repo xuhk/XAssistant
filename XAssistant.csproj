@@ -7,6 +7,8 @@
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <ApplicationIcon>Assets\app-icon.ico</ApplicationIcon>
+    <!-- 可做大小比较的语义化版本；SDK 会把 git sha 接在 ProductVersion 后面 -->
+    <Version>1.0.1</Version>
   </PropertyGroup>
 
   <ItemGroup>
