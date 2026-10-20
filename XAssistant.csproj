@@ -9,6 +9,8 @@
     <ApplicationIcon>Assets\app-icon.ico</ApplicationIcon>
     <!-- 可做大小比较的语义化版本；SDK 会把 git sha 接在 ProductVersion 后面 -->
     <Version>1.0.1</Version>
+    <!-- 本机私有模块默认编入；打公开 Release 包时传 -p:IncludeLocalModules=false 排除 -->
+    <IncludeLocalModules Condition="'$(IncludeLocalModules)' == ''">true</IncludeLocalModules>
   </PropertyGroup>
 
   <ItemGroup>
@@ -37,12 +39,15 @@
   </ItemGroup>
 
   <!-- 本机私有模块（Local/ 是指向仓库外目录的联结，已被 .gitignore）。
-       先 Remove 再 Include，避免 SDK 默认通配已经收过一遍导致 NETSDK1022 重复项。
-       Local/ 不存在时整个 ItemGroup 为空。 -->
-  <ItemGroup Condition="Exists('Local')">
+       先无条件 Remove，避免 SDK 默认通配在关闭私有模块时仍把 Local 收进来；
+       再按开关 Include 一次，避免重复项。Local/ 不存在时整个 ItemGroup 为空。 -->
+  <ItemGroup>
     <Compile Remove="Local/**/*.cs" />
-    <Compile Include="Local/**/*.cs" />
     <Page Remove="Local/**/*.xaml" />
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('Local') And '$(IncludeLocalModules)' != 'false'">
+    <Compile Include="Local/**/*.cs" />
     <Page Include="Local/**/*.xaml" />
   </ItemGroup>
 
@@ -52,8 +57,8 @@
     <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.7" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.7" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.7" />
-    <!-- Npgsql 只有本机私有模块（Local/ 里的速记）在用，开源构建不拉这个包 -->
-    <PackageReference Include="Npgsql" Version="10.0.3" Condition="Exists('Local')" />
+    <!-- Npgsql 只有本机私有模块（Local/ 里的速记）在用，公开构建不拉这个包 -->
+    <PackageReference Include="Npgsql" Version="10.0.3" Condition="Exists('Local') And '$(IncludeLocalModules)' != 'false'" />
     <PackageReference Include="Serilog.Extensions.Logging" Version="8.0.0" />
     <PackageReference Include="Serilog.Sinks.File" Version="5.0.0" />
     <PackageReference Include="System.Management" Version="9.0.0" />

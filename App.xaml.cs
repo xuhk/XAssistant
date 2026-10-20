@@ -31,6 +31,9 @@ public partial class App : System.Windows.Application
     /// <summary>--register-startup / --unregister-startup 这条维护路径，不建容器。</summary>
     private bool _isStartupMaintenance;
 
+    /// <summary>在配置目录就绪之前退出（没建容器），退出流程不要碰 Services。</summary>
+    private bool _isStartupAborted;
+
     /// <summary>单实例锁（按数据目录区分）。进程活着就持有，结束后由内核释放。</summary>
     private Mutex? _singleInstance;
 
@@ -79,6 +82,25 @@ public partial class App : System.Windows.Application
         bool silentLaunch = e.Args.Any(a =>
             string.Equals(a, StartupService.SilentArgument, StringComparison.OrdinalIgnoreCase)
         );
+
+        // 计划任务在登录时立即拉起；登录初期用户配置单元可能还没挂载完，
+        // %APPDATA% 会指向临时目录。等真实目录就绪再建日志、读库，
+        // 替代原来在计划任务上写死的 8 秒延时（SSD 机器不用白等）。
+        if (
+            !AppDataPathHelper.WaitForApplicationDataReady(
+                TimeSpan.FromSeconds(20),
+                out long appDataWaitMs
+            )
+        )
+        {
+            _isStartupAborted = true;
+            AppendStartupErrorNote(
+                "用户配置目录 20 秒内未就绪，本次启动退出；计划任务 / Run 键稍后会再试"
+            );
+            Shutdown(2);
+            return;
+        }
+
         if (!TryAcquireSingleInstance(silentLaunch))
         {
             Shutdown();
@@ -151,9 +173,10 @@ public partial class App : System.Windows.Application
         _appLogger = provider.GetRequiredService<ILogger<App>>();
         _appLogger.LogInformation("═══════ XAssistant 启动成功 ═══════");
         _appLogger.LogInformation(
-            "版本 {Version}，数据目录 {Dir}",
+            "版本 {Version}，数据目录 {Dir}；登录后等待用户配置 {WaitMs} ms",
             AppVersion.Display,
-            AppDataPathHelper.GetAppDataFolder()
+            AppDataPathHelper.GetAppDataFolder(),
+            appDataWaitMs
         );
 
         // 老版本只挂 Run 键（要等 explorer 处理，登录后 30~55 秒才起来）。
@@ -164,7 +187,7 @@ public partial class App : System.Windows.Application
             _appLogger.LogInformation("开机自启还只有 Run 键，正在升级为登录计划任务…");
             startup.SetAutoStart(true);
             _appLogger.LogInformation(
-                "开机自启升级完成：计划任务已注册={Registered}（登录后约 8 秒拉起）",
+                "开机自启升级完成：计划任务已注册={Registered}（登录时立即拉起）",
                 startup.IsLogonTaskRegistered()
             );
         }
@@ -257,12 +280,13 @@ public partial class App : System.Windows.Application
     private bool TryAcquireSingleInstance(bool silent)
     {
         string dataDir = AppDataPathHelper.GetAppDataFolder();
-        string leaf = Path.GetFileName(dataDir.TrimEnd(Path.DirectorySeparatorChar));
         try
         {
+            // 锁名只由应用名决定，不能用数据目录：登录初期数据目录可能还没就绪，
+            // 两个实例会算出不同的锁名，单实例保护就失效了。
             _singleInstance = new Mutex(
                 initiallyOwned: true,
-                $"Local\\XAssistant.SingleInstance.{leaf}",
+                $"Local\\XAssistant.SingleInstance.{StartupAppName}",
                 out bool createdNew
             );
             if (createdNew)
@@ -292,6 +316,23 @@ public partial class App : System.Windows.Application
             );
         }
         return false;
+    }
+
+    /// <summary>配置目录就绪前退出时写 %TEMP% —— 此刻 AppData 还不可信。</summary>
+    private static void AppendStartupErrorNote(string message)
+    {
+        try
+        {
+            string file = Path.Combine(Path.GetTempPath(), "XAssistant-startup-error.log");
+            File.AppendAllText(
+                file,
+                $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} {message}{Environment.NewLine}"
+            );
+        }
+        catch
+        {
+            // 留痕失败无所谓
+        }
     }
 
     /// <summary>给日志文件补一行备注。此刻 Serilog 可能还没建，用最朴素的追加方式，失败就算了。</summary>
@@ -401,8 +442,8 @@ public partial class App : System.Windows.Application
         if (_isDataSaved)
             return;
 
-        // 维护入口没建容器，Services 还是 null —— 这条路上也没有采集要停
-        if (_isStartupMaintenance)
+        // 维护入口 / 配置目录未就绪时都没建容器，Services 还是 null
+        if (_isStartupMaintenance || _isStartupAborted)
             return;
 
         _isDataSaved = true;
@@ -424,8 +465,8 @@ public partial class App : System.Windows.Application
 
     protected override void OnExit(ExitEventArgs e)
     {
-        // 维护入口走的是建 DI 之前的路径：没有采集、托盘、日志器，直接退
-        if (_isStartupMaintenance)
+        // 维护入口 / 配置目录未就绪时走的是建 DI 之前的路径：没有采集、托盘、日志器，直接退
+        if (_isStartupMaintenance || _isStartupAborted)
         {
             base.OnExit(e);
             return;

@@ -2,12 +2,13 @@
   看 / 切换 XAssistant 的开机自启注册点。
 
   为什么要有它：自启现在挂**两条路** ——
-    · 计划任务「登录时触发 + 延时 8 秒」：主路，负责提前
+    · 计划任务「登录时触发、立即拉起」：主路，负责提前；程序会等用户配置就绪后开始记录
     · 注册表 HKCU\...\Run：兜底（计划任务没注册上时仍然能自启，只是慢）
 
   2026-09-23 实测（拿 System 事件日志 7001 的登录时刻去对日志首条启动时间）：
   只有 Run 键那一档时是登录后 29~55 秒才起来，中位 42.5 秒 —— 因为 explorer 要先把 shell
-  拉起来、再排完 Run 里前面的 5 个启动项，它才轮到。计划任务这一档理论值 8~10 秒。
+  拉起来、再排完 Run 里前面的 5 个启动项，它才轮到。计划任务在登录时立即触发，实际启动时间
+  取决于机器和用户配置就绪时间，通常远快于 Run 键。
 
   用法（默认只看不动手）：
     powershell -ExecutionPolicy Bypass -File D:\code\XAssistant\tools\xassistant-autostart.ps1
@@ -113,7 +114,7 @@ function Show-Timing {
   $rows | Select-Object -First 10 | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
   $avg = ($rows | Measure-Object 延迟秒 -Average).Average
   Write-Host ("  最近 {0} 次平均 {1} 秒" -f $rows.Count, [math]::Round($avg, 1)) -ForegroundColor Yellow
-  Write-Host '  （改成计划任务后重启一次，这里应该掉到 10 秒上下）' -ForegroundColor DarkGray
+  Write-Host '  （改成计划任务后重启一次，这里通常会明显低于旧的 Run 键方式）' -ForegroundColor DarkGray
 }
 
 Show-Registration

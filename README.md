@@ -4,50 +4,72 @@
 
 ## 说明
 
-这是一个 **vibe coding** 产物：代码由 **0731 之前的 DeepSeek Flash 网页版**编写，由 **DeepSeek Flash 0731** 发布，作者本人对 C# / .NET 并不熟悉。项目仅在作者自己的机器上验证可用（Windows 10 专业版 22H2 build 19045，64 位），**不保证其它环境兼容**。不懂的地方可以直接问 AI，或者干脆让AI写一个更好。
+这是一个 **vibe coding** 产物，作者本人对 C# / .NET 并不熟悉。项目仅在作者自己的机器上验证可用（Windows 10 专业版 22H2 build 19045，64 位），**不保证其它环境兼容**。不懂的地方可以直接问 AI，或者干脆让AI写一个更好。
+
+## 本次更新（1.0.1）
+
+本版主要修复采集丢数据、服务缺席和时长重复计算的问题，并新增「关于」页。
+
+### 新增
+
+- 新增「关于」页面：查看当前版本、检查更新和更新日志。
+
+### 修复
+
+- 修复断电或强制结束后，电脑使用时长把停机时间也算进去的问题。
+- 修复主程序运行时，当天的电脑使用时长有时不写入数据库、数字长时间停在旧值。
+- 修复程序重启后，同一个应用被重复计时、当天总时长翻倍。
+- 修复按键和鼠标必须先打开统计页才开始记录的问题；现在随程序启动就记录，采集启动失败会自动重试并写日志。
+
+### 优化
+
+- 优化开机自启速度。
+- 后台服务异常退出后会自动重启；升级主程序时不会删除后台服务文件。
+
+更早版本见 [CHANGELOG.md](./CHANGELOG.md)。
 
 ## 安装
 
-1. 从 Releases 下载两个压缩包：主程序 `XAssistant-win-x64-*.zip` 与后台服务 `XAssistant.Service-win-x64-*.zip`。
-2. 解压到同一文件夹，保持目录结构：
+1. 从 Releases 下载一种包：`XAssistant-win-x64-*.zip`（自带运行时，体积大，开箱即用）或 `XAssistant-win-x64-noruntime-*.zip`（不带运行时，体积小，需要 .NET 10 Desktop Runtime）。
+2. 解压到任意文件夹（程序本体在 `app\`，后台服务在 `XAssistant.Service\`，都不用打开；不要直接双击 `app\XAssistant.exe`）。
+3. 双击 `install.cmd`，按提示允许管理员权限。首次安装会让你选择安装目录（直接回车使用 `C:\XAssistant`）；安装脚本会一并安装后台服务并启动程序。只想装主程序或只更新服务时，分别双击 `install-app.cmd` / `install-service.cmd`。
+4. 默认**不会**开机自启动。需要常驻统计的话，在应用界面左侧勾选"**开机自动启动**"：登录时由计划任务立即拉起（等用户配置目录就绪后再读写数据），注册表 Run 键作为兜底。
 
-   ```
-   你的文件夹/
-   ├─ XAssistant.exe
-   └─ XAssistant.Service/
-      ├─ XAssistant.Service.exe
-      └─ install-service.ps1
-   ```
+> 安装脚本会一并安装后台服务（负责「电脑使用时长」）。安装目录可以自己选，以后升级会自动识别。请装在固定的本地磁盘，放在移动盘或可能离线的副盘上时，开机时后台服务可能起不来。
 
-3. 右键 `install-service.ps1` → **使用 PowerShell 运行**（会请求管理员授权），或在管理员 PowerShell 中执行：
+## 升级
 
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File .\XAssistant.Service\install-service.ps1
-   ```
+不需要手动从托盘退出——退出要点鼠标，反而容易漏记。
 
-   后台服务随开机启动，请把整个文件夹放在本机固定磁盘（例如 `C:\`）；放在可能离线的副盘或移动盘上时，开机瞬间服务会因为找不到文件而起不来。
+### 从 Release 包升级
 
-4. 双击 `XAssistant.exe` 即可。
-5. 默认**不会**开机自启动。需要常驻统计的话，在应用界面左侧勾选"**开机自动启动**"：登录时由计划任务拉起（约 8 秒），注册表 Run 键作为兜底。
+1. 下载新版对应的一种包（带运行时 / 不带运行时都行，脚本和目录结构一样），解压到任意文件夹；同样不要直接点 `app\XAssistant.exe`。
+2. 双击 `install.cmd`（只升级主程序或服务时用 `install-app.cmd` / `install-service.cmd`）。脚本会自动找到现有安装目录，结束正在运行的程序和后台服务、备份旧版本、替换文件、更新服务并启动。旧版本会备份到安装目录旁边，最多保留最近 3 份。
 
-> 不装后台服务也能用键盘 / 鼠标 / 应用时长等功能，仅"电脑使用时长"无法获取。
+数据保存在 `%APPDATA%\XAssistant` 和 `C:\ProgramData\XAssistant\UsageTracker`，不随安装目录覆盖。程序不会自动下载或安装更新；可以在「关于」页点「检查更新」确认有没有新版本，再打开下载页。
+
+### 从源码更新
+
+管理员 PowerShell 运行 `.\install.ps1`：默认构建并部署主程序（自动识别安装目录，`-InstallDir` 可指定）。
+
+后台服务有更新时，再在 `XAssistant.Service` 目录运行 `.\publish-and-install.ps1`。
 
 ## 功能
 
-| 功能 | 说明 |
-| --- | --- |
-| ⌨️ 键盘按键统计 | 按键计数，区分左右修饰键（Ctrl / Shift / Alt / Win） |
-| 🖱️ 鼠标点击统计 | 记录左 / 中 / 右键点击次数 |
+| 功能            | 说明                                                           |
+| --------------- | -------------------------------------------------------------- |
+| ⌨️ 键盘按键统计 | 按键计数，区分左右修饰键（Ctrl / Shift / Alt / Win）           |
+| 🖱️ 鼠标点击统计 | 记录左 / 中 / 右键点击次数                                     |
 | 💻 电脑使用时长 | 记录电脑每天的开机 / 使用时长，依赖后台服务 XAssistant.Service |
-| 📊 应用使用时长 | WMI 追踪各应用使用时长——**不完善，统计可能有偏差** |
-| ℹ️ 关于 | 查看当前版本、手动检查更新和更新日志 |
+| 📊 应用使用时长 | WMI 追踪各应用使用时长——**不完善，统计可能有偏差**             |
+| ℹ️ 关于         | 查看当前版本、手动检查更新和更新日志                           |
 
 关闭窗口只是隐藏到托盘，托盘菜单中才有"退出"。
 
 ## 支持环境
 
 - 亲测环境：Windows 10 专业版 22H2（19045），64 位
-- 直接运行 Release 包**无需安装 .NET**（已自包含打包）
+- 带运行时的包开箱即用；不带运行时的包需要 .NET 10 Desktop Runtime（安装脚本会检查并给出下载地址）
 - 其它环境不保证兼容
 
 ## 数据存储
@@ -64,15 +86,12 @@
 # 构建整个解决方案（主程序 + 后台服务）
 dotnet build XAssistant.sln -c Release
 
-# 发布主程序（自包含，win-x64）
-dotnet publish XAssistant.csproj -r win-x64 -c Release --self-contained true
-
-# 发布后台服务（自包含，win-x64）
-dotnet publish XAssistant.Service\XAssistant.Service.csproj -c Release --self-contained true -r win-x64
+# 打两种 Release 包（带运行时 / 不带运行时；自动排除 Local 私有模块）
+# 打包脚本会分别用 --self-contained true/false 发布主程序和服务
+powershell -ExecutionPolicy Bypass -File tools\package-release.ps1
 ```
 
 需安装 [.NET 10 SDK](https://dotnet.microsoft.com/download)。
-
 
 ## 许可证
 

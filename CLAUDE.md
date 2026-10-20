@@ -18,7 +18,8 @@ UI 采用基于 CommunityToolkit.Mvvm 的 WPF MVVM 架构。项目没有自动�
 - 构建：`dotnet build`（需要 .NET 10 SDK）
 - 运行（调试）：`dotnet run`
 - 发布（Release，win-x64）：`dotnet publish -r win-x64 -c Release` —— 输出位于 `bin\Release\net10.0-windows\win-x64\publish`（`build.bat` 封装了这条命令）
-- 部署到 `C:\XAssistant` 并重新启动：`powershell -ExecutionPolicy Bypass -File deploy.ps1` —— 必须以管理员身份运行；该脚本会停止正在运行的实例、备份旧版本、复制新构建并启动应用
+- 安装/升级：`powershell -ExecutionPolicy Bypass -File install.ps1` —— 源码目录运行时先构建再部署，Release 包内运行时直接安装包内文件；支持 `-AppOnly` / `-ServiceOnly`，自动识别安装目录、结束进程、备份并启动，需要管理员权限
+- 打 Release 包：`powershell -ExecutionPolicy Bypass -File tools\package-release.ps1` —— 生成两个 zip（带运行时 / 不带运行时；主程序 + 后台服务 + install.cmd / install-app.cmd / install-service.cmd），自动排除 `Local/` 私有模块
 - 格式化代码：`dotnet tool restore && dotnet csharpier .`（CSharpier 1.2.6 是 `dotnet-tools.json` 中固定的格式化工具）
 
 ## 数据存储
@@ -49,9 +50,9 @@ UI 采用基于 CommunityToolkit.Mvvm 的 WPF MVVM 架构。项目没有自动�
 
 ### 开机自启与版本检查
 
-- **开机自启挂两条路**（`Services/StartupService.cs`）：登录触发的计划任务负责**提前**（约 8 秒；这 8 秒是等用户配置单元挂载完，别改成 0，否则 `%APPDATA%` 可能指向临时目录），注册表 `HKCU\...\Run` 负责兜底（慢 30~55 秒）。两条路同时生效时靠单实例锁 `App.TryAcquireSingleInstance` 去重，后起的那个静默退出；`--silent` 只驻留托盘。`--register-startup` / `--unregister-startup` 是给 `tools/xassistant-autostart.ps1` 用的维护入口，改注册点不用让用户先退应用。
+- **开机自启挂两条路**（`Services/StartupService.cs`）：登录触发的计划任务负责**提前**（登录时立即拉起，不再固定等 8 秒），注册表 `HKCU\...\Run` 负责兜底（慢 30~55 秒）。程序启动后由 `AppDataPathHelper.WaitForApplicationDataReady` 等用户配置目录真正就绪再建日志 / 读库，替代原来的 8 秒延时。两条路同时生效时靠单实例锁 `App.TryAcquireSingleInstance` 去重（锁名只用应用名，不能用尚未就绪的数据目录），后起的那个静默退出；`--silent` 只驻留托盘。`--register-startup` / `--unregister-startup` 是给 `tools/xassistant-autostart.ps1` 用的维护入口，改注册点不用让用户先退应用。
 - **检查更新**（`Services/UpdateService.cs`）只在用户点按钮时联网：`api.github.com/.../releases/latest` 与 `github.com/.../releases/latest` 两个端点**并发**探测，任一拿到 tag 即用（两个端点都会间歇性不可用，串行会白等），5 分钟防抖；只发现、不下载。版本号来自 `Services/AppVersion.cs` 解析的 `ProductVersion`（`1.0.1+sha`）。
-- **版本入口收在「关于」页**（`ViewModels/AboutViewModel.cs` + `Views/AboutView.xaml`），侧栏只留一个「关于」导航——更新不频繁也不强制，不占用常驻界面。更新日志是仓库根目录的 `CHANGELOG.md`，以嵌入资源 `XAssistant.CHANGELOG.md` 编进程序集；页面只解析 `## 版本 — 日期`、`### 分类`、`- 变更` 三种行（分类沿用 Keep a Changelog 的 新增 / 修复 / 改进 / 其他），不引 Markdown 库。改日志时只改 `CHANGELOG.md` 一处。
+- **版本入口收在「关于」页**（`ViewModels/AboutViewModel.cs` + `Views/AboutView.xaml`），侧栏只留一个「关于」导航——更新不频繁也不强制，不占用常驻界面。更新日志是仓库根目录的 `CHANGELOG.md`，以嵌入资源 `XAssistant.CHANGELOG.md` 编进程序集；页面只解析 `## 版本 — 日期`、`### 分类`、`- 变更` 三种行（分类名由 `CHANGELOG.md` 的 `###` 决定，当前用 新增 / 修复 / 优化；只支持一层列表，缩进子项会被忽略），不引 Markdown 库。改日志时只改 `CHANGELOG.md` 一处。
 
 ### 四个模块
 每个模块 = 钩子服务 + SQLite 仓库 + ViewModel + View：

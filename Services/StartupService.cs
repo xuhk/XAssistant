@@ -10,10 +10,11 @@ using XAssistant.Services.Interfaces;
 ///
 /// 同时挂**两条路**，一条抢时间、一条兜底：
 ///
-///  1. **计划任务**：触发器「用户登录时」+ 延时 8 秒 —— 主路，负责提前。
+///  1. **计划任务**：触发器「用户登录时」—— 主路，负责提前。
 ///     注册表 Run 键要等 explorer 把 shell 拉起来才开始处理，那是整套登录流程里最晚的一档。
 ///     2026-09-23 实测（对着 System 事件日志 7001 的登录时刻量）：Run 键这一档是登录后
-///     29~55 秒，中位 42.5 秒；改成登录触发的计划任务后理论值约 8~10 秒。
+///     29~55 秒，中位 42.5 秒。计划任务在登录时立即触发，程序启动后再等用户配置目录真正就绪
+///     （见 <see cref="AppDataPathHelper.WaitForApplicationDataReady"/>）才开始读库 / 写日志。
 ///
 ///  2. **注册表 HKCU\...\Run** —— 兜底。计划任务注册失败（权限、被安全软件拦、被手工禁用、
 ///     被组策略清掉）时，这一条仍然保证能自启，只是慢几十秒。宁慢勿缺。
@@ -44,17 +45,18 @@ public class StartupService : IStartupService
     public const string UnregisterStartupArgument = "--unregister-startup";
 
     /// <summary>
-    /// 计划任务在登录之后再等这么久（ISO 8601 duration）。
+    /// 计划任务的登录延时（ISO 8601 duration）。
     ///
-    /// **为什么不能是 0**：登录事件刚触发时用户配置单元可能还没挂载完，那时候
-    /// <c>Environment.GetFolderPath(ApplicationData)</c> 会指向临时目录 —— 数据就写到别处去了，
-    /// 而且是静默写错。等 8 秒足够躲开这个窗口，仍然远快于 Run 键那一档。
+    /// **保持 0**：登录时就拉起进程，用户配置目录是否就绪交给
+    /// <see cref="AppDataPathHelper.WaitForApplicationDataReady"/> 判断。
+    /// 以前固定等 8 秒是为了躲开配置单元还没挂载的窗口；现在改成按实际就绪时间等，
+    /// SSD 机器登录后往往一两秒内就能开始记录，不用白等。
     /// </summary>
-    private const string LogonDelay = "PT8S";
+    private const string LogonDelay = "PT0S";
 
     /// <summary>任务管理器 / 计划任务程序里显示不了那么长，这里给一句能看懂的。</summary>
     private const string TaskDescription =
-        "XAssistant 开机自启：登录后延时 8 秒拉起（注册表 Run 键要等 explorer 处理，会晚约 35 秒）";
+        "XAssistant 开机自启：登录时立即拉起（程序会等用户配置就绪后开始记录）";
 
     // ── Task Scheduler COM 枚举值。名字都在这儿，免得看代码时来回查文档 ──
     private const int TriggerTypeLogon = 9;
@@ -224,9 +226,8 @@ public class StartupService : IStartupService
             });
 
             Serilog.Log.Information(
-                "开机自启已升级为计划任务「{Task}」：登录后延时 {Delay} 拉起（不再等 explorer 处理 Run 键）",
-                _appName,
-                LogonDelay
+                "开机自启已升级为计划任务「{Task}」：登录时立即拉起（程序会等用户配置就绪）",
+                _appName
             );
         }
         catch (Exception ex)

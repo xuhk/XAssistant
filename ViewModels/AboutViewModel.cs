@@ -114,7 +114,7 @@ public partial class AboutViewModel : ViewModelBase
     /// <summary>
     /// 从嵌入的 CHANGELOG.md 读。只认三种行：`## 版本 — 日期`、`### 分类`、`- 变更`，
     /// 其余（标题、空行、说明）都跳过 —— 不引 Markdown 解析库。
-    /// 分类沿用 Keep a Changelog 的常见写法（新增 / 修复 / 改进 / 其他）。
+    /// 分类名由 CHANGELOG.md 的 `###` 决定，当前用 新增 / 修复 / 优化。
     /// </summary>
     private void LoadChangelog()
     {
