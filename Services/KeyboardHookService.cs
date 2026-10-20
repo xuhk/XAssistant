@@ -34,9 +34,40 @@ public class KeyboardHookService : IKeyboardHookService, IDisposable
 
     public void Start()
     {
-        using var curProcess = Process.GetCurrentProcess();
-        using var curModule = curProcess.MainModule!;
-        _hookId = SetWindowsHookEx(WH_KEYBOARD_LL, _proc, GetModuleHandle(curModule.ModuleName), 0);
+        // 每调一次 SetWindowsHookEx 就多一个钩子，旧句柄还会丢
+        if (_hookId != IntPtr.Zero)
+            return;
+
+        for (int attempt = 1; attempt <= 2; attempt++)
+        {
+            using var curProcess = Process.GetCurrentProcess();
+            using var curModule = curProcess.MainModule!;
+            _hookId = SetWindowsHookEx(
+                WH_KEYBOARD_LL,
+                _proc,
+                GetModuleHandle(curModule.ModuleName),
+                0
+            );
+
+            if (_hookId != IntPtr.Zero)
+            {
+                _logger.LogInformation(
+                    "键盘采集已启动（钩子句柄 0x{HookId:X}）",
+                    _hookId.ToInt64()
+                );
+                return;
+            }
+
+            _logger.LogWarning(
+                "键盘钩子安装失败（第 {Attempt}/2 次），Win32 错误码 {Error}",
+                attempt,
+                Marshal.GetLastWin32Error()
+            );
+            if (attempt < 2)
+                Thread.Sleep(200);
+        }
+
+        _logger.LogError("键盘采集未能启动：SetWindowsHookEx 连续两次失败");
     }
 
     public void Stop()
@@ -115,7 +146,12 @@ public class KeyboardHookService : IKeyboardHookService, IDisposable
         // 扫描码 0x63 是多数笔记本 Fn 的扫描码；其余保留原始码值以便后续识别
         if (scanCode == 0x63)
             return "Fn";
-        _logger.LogWarning("按键无法识别，扫描码 0x{Scan:X2}，虚拟键码 0x{Vk:X2}，标志 0x{Flags:X2}", scanCode, vkCode, flags);
+        _logger.LogWarning(
+            "按键无法识别，扫描码 0x{Scan:X2}，虚拟键码 0x{Vk:X2}，标志 0x{Flags:X2}",
+            scanCode,
+            vkCode,
+            flags
+        );
         return $"Unknown (scan 0x{scanCode:X2}, vk 0x{vkCode:X2})";
     }
 

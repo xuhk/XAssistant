@@ -110,6 +110,17 @@ public partial class App : System.Windows.Application
         _appLogger = provider.GetRequiredService<ILogger<App>>();
         _appLogger.LogInformation("═══════ XAssistant 启动成功 ═══════");
 
+        // 采集不能依赖用户是否访问过统计页：这两个 VM 的构造就是钩子的启动点。
+        // 显式解析一次，保证即使主窗没显示 / 从未点开统计页，采集也已经装上。
+        var config = provider.GetRequiredService<IConfigurationService>();
+        _appLogger.LogInformation(
+            "采集配置：键盘自动启动={Keyboard}，鼠标自动启动={Mouse}",
+            config.GetKeyRecordingAutoStart(),
+            config.GetRecordingAutoStart()
+        );
+        provider.GetRequiredService<KeyCounterViewModel>();
+        provider.GetRequiredService<ClickCounterViewModel>();
+
         // 后续主窗口
         var mainVM = provider.GetRequiredService<MainWindowViewModel>();
 

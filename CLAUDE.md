@@ -37,6 +37,8 @@ UI 采用基于 CommunityToolkit.Mvvm 的 WPF MVVM 架构。项目没有自动�
 
 “电脑使用统计”页面（`UsageViewModel`）**不读取**本仓库的数据。它通过命名管道 `UsageTrackerPipe` 和位于 `C:\ProgramData\XAssistant\UsageTracker\pc_usage.db` 的 SQLite 数据库来消费独立的 “UsageTracker” 后台服务。如果该服务未运行，它会回退到数据库，最后显示“无法获取”。管道服务器和 `pc_usage.db` 的写入方都不在本仓库中。
 
+服务端收尾约定（`XAssistant.Service/Services/UsageTrackingService.cs`）：断电 / 强杀走不到 `Dispose()`，所以每次落盘（7 秒定时 + 每次客户端轮询）都会把「最后确认还活着」的时刻写进 `ServiceHeartbeat`；下次启动时若最后一条 `SessionEvents` 停在 `ServiceStarted` / `Resume`，就在心跳时刻补一条 `ServiceStopped`。混合关机走 `Suspend` / `Resume`，本身是闭合区间，不需要补。服务应安装在固定本地盘（`C:`），不要放在会掉盘或离线的副盘上。
+
 ## 架构
 
 ### 启动引导与导航

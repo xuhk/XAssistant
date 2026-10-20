@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using Microsoft.Extensions.Logging;
 using XAssistant.Services.Interfaces;
 
 namespace XAssistant.Services;
@@ -14,11 +15,13 @@ public class MouseClickHookService : IMouseClickHookService, IDisposable
     private const int WM_MBUTTONDOWN = 0x0207;
     private const int WM_RBUTTONDOWN = 0x0204;
 
+    private readonly ILogger<MouseClickHookService> _logger;
     private LowLevelMouseProc _proc;
     private IntPtr _hookId = IntPtr.Zero;
 
-    public MouseClickHookService()
+    public MouseClickHookService(ILogger<MouseClickHookService> logger)
     {
+        _logger = logger;
         _proc = HookCallback;
     }
 
@@ -28,18 +31,36 @@ public class MouseClickHookService : IMouseClickHookService, IDisposable
         if (_hookId != IntPtr.Zero)
             return; // 已有一个钩子在运行
 
-        // 获取模块名（优化后写法，避免 using 风险）
-        string? moduleName = Process.GetCurrentProcess().MainModule?.ModuleName;
-        if (string.IsNullOrEmpty(moduleName))
-            throw new InvalidOperationException("无法获取主模块名称，钩子安装失败。");
-
-        _hookId = SetWindowsHookEx(WH_MOUSE_LL, _proc, GetModuleHandle(moduleName), 0);
-
-        if (_hookId == IntPtr.Zero)
+        for (int attempt = 1; attempt <= 2; attempt++)
         {
-            int error = Marshal.GetLastWin32Error();
-            throw new InvalidOperationException($"SetWindowsHookEx 失败，错误代码：{error}");
+            // 获取模块名（优化后写法，避免 using 风险）
+            string? moduleName = Process.GetCurrentProcess().MainModule?.ModuleName;
+            if (string.IsNullOrEmpty(moduleName))
+            {
+                _logger.LogError("鼠标采集未能启动：无法获取主模块名称");
+                return;
+            }
+
+            _hookId = SetWindowsHookEx(WH_MOUSE_LL, _proc, GetModuleHandle(moduleName), 0);
+            if (_hookId != IntPtr.Zero)
+            {
+                _logger.LogInformation(
+                    "鼠标采集已启动（钩子句柄 0x{HookId:X}）",
+                    _hookId.ToInt64()
+                );
+                return;
+            }
+
+            _logger.LogWarning(
+                "鼠标钩子安装失败（第 {Attempt}/2 次），Win32 错误码 {Error}",
+                attempt,
+                Marshal.GetLastWin32Error()
+            );
+            if (attempt < 2)
+                Thread.Sleep(200);
         }
+
+        _logger.LogError("鼠标采集未能启动：SetWindowsHookEx 连续两次失败");
     }
 
     public void Stop()
