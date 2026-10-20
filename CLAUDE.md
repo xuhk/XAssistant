@@ -47,6 +47,12 @@ UI 采用基于 CommunityToolkit.Mvvm 的 WPF MVVM 架构。项目没有自动�
 - View→ViewModel 的映射通过 `App.xaml` 中的 `DataTemplate`（每个 VM 一个）完成。`MainWindow` 显示一个绑定到 `MainWindowViewModel.CurrentViewModel` 的 `ContentControl`；左侧菜单通过 `Navigate` 中继命令切换页面。`MainWindowViewModel` 还负责底部日志面板、日志过滤和窗口大小持久化。
 - `HomeViewModel` 聚合四个模块的 ViewModel，并将其 `PropertyChanged` 事件转发到自身同名的属性。所有模块 ViewModel 都是单例，因此无论当前显示哪个页面，实时数据（钩子、定时器）都会持续流动。
 
+### 开机自启与版本检查
+
+- **开机自启挂两条路**（`Services/StartupService.cs`）：登录触发的计划任务负责**提前**（约 8 秒；这 8 秒是等用户配置单元挂载完，别改成 0，否则 `%APPDATA%` 可能指向临时目录），注册表 `HKCU\...\Run` 负责兜底（慢 30~55 秒）。两条路同时生效时靠单实例锁 `App.TryAcquireSingleInstance` 去重，后起的那个静默退出；`--silent` 只驻留托盘。`--register-startup` / `--unregister-startup` 是给 `tools/xassistant-autostart.ps1` 用的维护入口，改注册点不用让用户先退应用。
+- **检查更新**（`Services/UpdateService.cs`）只在用户点按钮时联网：`api.github.com/.../releases/latest` 与 `github.com/.../releases/latest` 两个端点**并发**探测，任一拿到 tag 即用（两个端点都会间歇性不可用，串行会白等），5 分钟防抖；只发现、不下载。版本号来自 `Services/AppVersion.cs` 解析的 `ProductVersion`（`1.0.1+sha`）。
+- **版本入口收在「关于」页**（`ViewModels/AboutViewModel.cs` + `Views/AboutView.xaml`），侧栏只留一个「关于」导航——更新不频繁也不强制，不占用常驻界面。更新日志是仓库根目录的 `CHANGELOG.md`，以嵌入资源 `XAssistant.CHANGELOG.md` 编进程序集；页面只解析 `## 版本 — 日期`、`### 分类`、`- 变更` 三种行（分类沿用 Keep a Changelog 的 新增 / 修复 / 改进 / 其他），不引 Markdown 库。改日志时只改 `CHANGELOG.md` 一处。
+
 ### 四个模块
 每个模块 = 钩子服务 + SQLite 仓库 + ViewModel + View：
 1. **鼠标点击** —— `MouseClickHookService`（WH_MOUSE_LL）→ `ClickDatabaseService` → `ClickCounterViewModel`

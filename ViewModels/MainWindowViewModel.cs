@@ -69,7 +69,9 @@ public partial class MainWindowViewModel : ViewModelBase
         IsLogExpanded = _configService.GetIsLogExpanded();
         CurrentViewModel = homeViewModel;
         _homeViewModel = homeViewModel;
-        IsStartWithWindowsEnabled = _startupService.IsStartWithWindowsEnabled();
+        // 直接写 backing field：走属性 setter 会触发 OnIsStartWithWindowsEnabledChanged，
+        // 每次启动都重新注册一遍计划任务（还会多打一条「已升级」日志）。
+        _isStartWithWindowsEnabled = _startupService.IsStartWithWindowsEnabled();
 
         // 当日志集合变化时，通知 FilteredLogs 属性变化（简化方式）
         _logBuffer.LogEntries.CollectionChanged += (_, _) =>
@@ -106,6 +108,7 @@ public partial class MainWindowViewModel : ViewModelBase
             "KeyCounter" => App.Services.GetRequiredService<KeyCounterViewModel>(),
             "Usage" => App.Services.GetRequiredService<UsageViewModel>(),
             "AppUsage" => App.Services.GetRequiredService<AppUsageViewModel>(),
+            "About" => App.Services.GetRequiredService<AboutViewModel>(),
             _ => CurrentViewModel,
         };
     }

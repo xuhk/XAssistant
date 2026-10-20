@@ -16,6 +16,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- 「关于」页读取的更新日志：嵌进程序集，升级时不会漏拷 -->
+    <EmbeddedResource Include="CHANGELOG.md" LogicalName="XAssistant.CHANGELOG.md" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Compile Remove="XAssistant.Service\**" />
     <EmbeddedResource Remove="XAssistant.Service\**" />
     <None Remove="XAssistant.Service\**" />

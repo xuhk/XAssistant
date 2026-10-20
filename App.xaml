@@ -20,5 +20,8 @@
     <DataTemplate DataType="{x:Type vm:AppUsageViewModel}">
       <views:AppUsageView />
     </DataTemplate>
+    <DataTemplate DataType="{x:Type vm:AboutViewModel}">
+      <views:AboutView />
+    </DataTemplate>
   </Application.Resources>
 </Application>

@@ -1,0 +1,79 @@
+<UserControl
+  x:Class="XAssistant.Views.AboutView"
+  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <ScrollViewer VerticalScrollBarVisibility="Auto">
+    <StackPanel
+      MaxWidth="760"
+      Margin="28,24,28,24"
+      HorizontalAlignment="Left">
+      <TextBlock FontSize="26" FontWeight="SemiBold" Text="关于 XAssistant" />
+
+      <TextBlock
+        x:Name="AboutVersionText"
+        Margin="0,10,0,0"
+        FontSize="16"
+        Text="{Binding VersionText}" />
+
+      <StackPanel Margin="0,16,0,0" Orientation="Horizontal">
+        <Button
+          x:Name="AboutCheckUpdateButton"
+          MinWidth="110"
+          FontSize="14"
+          Command="{Binding CheckUpdateCommand}"
+          Content="{Binding UpdateButtonText}"
+          IsEnabled="{Binding CanCheckUpdate}" />
+        <TextBlock
+          x:Name="AboutUpdateStatusText"
+          Margin="12,0,0,0"
+          VerticalAlignment="Center"
+          FontSize="14"
+          Foreground="#666"
+          Text="{Binding UpdateStatusText}"
+          TextWrapping="Wrap" />
+      </StackPanel>
+
+      <Separator Margin="0,24,0,12" />
+
+      <TextBlock FontSize="18" FontWeight="SemiBold" Text="更新日志" />
+      <ItemsControl
+        x:Name="AboutChangelog"
+        Margin="0,10,0,0"
+        ItemsSource="{Binding Changelog}">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate>
+            <StackPanel Margin="0,0,0,14">
+              <TextBlock FontSize="15" FontWeight="SemiBold" Text="{Binding Title}" />
+              <ItemsControl Margin="12,4,0,0" ItemsSource="{Binding Categories}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <StackPanel Margin="0,0,0,8">
+                      <TextBlock
+                        FontSize="14"
+                        FontWeight="SemiBold"
+                        Foreground="#555"
+                        Text="{Binding Name}" />
+                      <ItemsControl Margin="12,2,0,0" ItemsSource="{Binding Items}">
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate>
+                            <TextBlock
+                              Margin="0,2"
+                              FontSize="14"
+                              TextWrapping="Wrap">
+                              <Run Text="• " />
+                              <Run Text="{Binding Mode=OneWay}" />
+                            </TextBlock>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                    </StackPanel>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

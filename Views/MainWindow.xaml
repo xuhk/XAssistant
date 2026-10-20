@@ -39,10 +39,17 @@
           CommandParameter="AppUsage"
           Content="软件使用" />
         <Separator Margin="0,20,0,5" />
+        <Button
+          x:Name="AboutNavButton"
+          Command="{Binding NavigateCommand}"
+          CommandParameter="About"
+          Content="关于" />
+        <Separator Margin="0,10,0,5" />
         <CheckBox
           Margin="10,5"
           Content="开机自动启动"
-          IsChecked="{Binding IsStartWithWindowsEnabled}" />
+          IsChecked="{Binding IsStartWithWindowsEnabled}"
+          ToolTip="登录后约 8 秒拉起（计划任务优先，注册表 Run 键兜底）" />
       </StackPanel>
 
       <!--  右侧内容区  -->
